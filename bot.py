@@ -1,6 +1,6 @@
 import logging
-import random
 import sqlite3
+import random
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -16,7 +16,7 @@ OPERATORI = {
 
 NOME_NEGOZIO = "Popperinho Shop"
 DB_PATH = "richieste.db"
-PREZZO_UNITARIO = 20  # € per Popperinho
+PREZZO_UNITARIO = 20
 
 logging.basicConfig(level=logging.INFO)
 
@@ -188,7 +188,7 @@ def get_stats_clienti():
     con.close()
     return rows
 
-def get_inattivi(giorni=30):
+def get_inattivi(giorni=28):
     con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
     cur.execute("SELECT chat_id, nome, username, ultimo_contatto FROM clienti")
@@ -224,7 +224,7 @@ def conta_ordini_totali():
     return n
 
 
-# ── TESTO E TASTIERA RICHIESTA ────────────────────────────────────────────────
+# ── TASTIERE ──────────────────────────────────────────────────────────────────
 
 def build_testo(req):
     rid, chat_id_cliente, nome_cliente, username, testo, ricevuta_il, presa_da, presa_il, ordine_completato, completato_il, completato_da = req
@@ -234,7 +234,6 @@ def build_testo(req):
         stato = f"✅ Presa da: {presa_da} alle {presa_il}\n📦 *Ordine completato da: {completato_da}* alle {completato_il}"
     else:
         stato = f"✅ Presa da: {presa_da} alle {presa_il}\n🔄 *In lavorazione*"
-
     return (
         f"📩 *Richiesta #{rid}*\n\n"
         f"👤 {nome_cliente}  |  {username}\n"
@@ -267,6 +266,32 @@ def tastiera_quantita():
             InlineKeyboardButton("✏️ Altre quantità o domande", callback_data="qty:altro"),
         ],
     ])
+
+
+# ── PROMEMORIA 28 GIORNI ──────────────────────────────────────────────────────
+
+async def invia_promemoria_inattivi(context: ContextTypes.DEFAULT_TYPE):
+    inattivi = get_inattivi(28)
+    inviati = 0
+    for chat_id, nome, username, ultimo, giorni in inattivi:
+        medie = random.randint(5, 20)
+        pulsante = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🛒 Ordina ora", callback_data="qty:nuovo")
+        ]])
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=(
+                    f"👋 Ciao {nome}, dobbiamo parlare.\n\n"
+                    f"Ultimamente ci sentiamo poco... forse è arrivato il momento di spopperare "
+                    f"e calarsi {medie} medie 🍺"
+                ),
+                reply_markup=pulsante
+            )
+            inviati += 1
+        except Exception as e:
+            logging.warning(f"Impossibile inviare promemoria a {chat_id}: {e}")
+    logging.info(f"Promemoria inattivi: inviati {inviati} messaggi.")
 
 
 # ── HANDLERS ──────────────────────────────────────────────────────────────────
@@ -379,7 +404,7 @@ async def gestisci_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ── Pulsanti operatori (prendo in carico / ordine completato) ──
+    # ── Pulsanti operatori ──
     operatore_id = query.from_user.id
     nome_operatore = OPERATORI.get(operatore_id, query.from_user.first_name)
 
@@ -495,10 +520,10 @@ async def cmd_top(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_inattivi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in OPERATORI:
         return
-    inattivi = get_inattivi(30)
+    inattivi = get_inattivi(28)
 
     if not inattivi:
-        await update.message.reply_text("Nessun cliente inattivo da più di 30 giorni. 🎉")
+        await update.message.reply_text("Nessun cliente inattivo da più di 28 giorni. 🎉")
         return
 
     righe = []
@@ -510,7 +535,7 @@ async def cmd_inattivi(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     await update.message.reply_text(
-        "😴 *Clienti inattivi da 30+ giorni:*\n\n" + "\n\n".join(righe),
+        "😴 *Clienti inattivi da 28+ giorni:*\n\n" + "\n\n".join(righe),
         parse_mode="Markdown"
     )
 
@@ -523,10 +548,13 @@ async def cmd_aiuto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/storico aperte — solo quelle in attesa\n"
         "/clienti — tutti i clienti con richieste e ordini\n"
         "/top — classifica clienti per ordini\n"
-        "/inattivi — chi non scrive da 30+ giorni\n"
+        "/inattivi — chi non scrive da 28+ giorni\n"
         "/aiuto — mostra questo messaggio",
         parse_mode="Markdown"
     )
+
+
+# ── AVVIO ─────────────────────────────────────────────────────────────────────
 
 def main():
     init_db()
@@ -550,29 +578,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-# ── PROMEMORIA AUTOMATICO 30 GIORNI ──────────────────────────────────────────
-
-async def invia_promemoria_inattivi(context: ContextTypes.DEFAULT_TYPE):
-    """Ogni giorno controlla chi è inattivo da 30+ giorni e gli manda un messaggio."""
-    inattivi = get_inattivi(30)
-    inviati = 0
-    for chat_id, nome, username, ultimo, giorni in inattivi:
-        medie = random.randint(5, 20)
-        pulsante = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🛒 Ordina ora", callback_data="qty:nuovo")
-        ]])
-        try:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=(
-                    f"👋 Ciao {nome}, dobbiamo parlare.\n\n"
-                    f"Ultimamente ci sentiamo poco... forse è arrivato il momento di spopperare "
-                    f"e calarsi {medie} medie 🍺"
-                ),
-                reply_markup=pulsante
-            )
-            inviati += 1
-        except Exception as e:
-            logging.warning(f"Impossibile inviare promemoria a {chat_id}: {e}")
-    logging.info(f"Promemoria inattivi: inviati {inviati} messaggi.")
