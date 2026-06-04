@@ -1,4 +1,5 @@
 import logging
+import random
 import sqlite3
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -274,7 +275,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nome = update.effective_user.first_name or "Cliente"
     await update.message.reply_text(
         f"👋 Ciao {nome}! Benvenuto da {NOME_NEGOZIO}.\n\n"
-        f"Manda la tua richiesta d'ordine e verrai contattato in privato il prima possibile! 🫵\n\n"
+        f"Scrivi la tua richiesta d'ordine e verrai contattato in privato il prima possibile! 🫵\n\n"
         f"Seleziona la quantità:",
         reply_markup=tastiera_quantita()
     )
@@ -538,8 +539,40 @@ def main():
     app.add_handler(CommandHandler("aiuto", cmd_aiuto))
     app.add_handler(CallbackQueryHandler(gestisci_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ricevi_messaggio))
+    # Promemoria automatico ogni 28 giorni alle 21:00
+    app.job_queue.run_repeating(
+        invia_promemoria_inattivi,
+        interval=28 * 24 * 3600,
+        first=datetime.strptime("21:00", "%H:%M").time()
+    )
     print(f"✅ Bot avviato — {NOME_NEGOZIO}")
     app.run_polling()
 
 if __name__ == "__main__":
     main()
+
+# ── PROMEMORIA AUTOMATICO 30 GIORNI ──────────────────────────────────────────
+
+async def invia_promemoria_inattivi(context: ContextTypes.DEFAULT_TYPE):
+    """Ogni giorno controlla chi è inattivo da 30+ giorni e gli manda un messaggio."""
+    inattivi = get_inattivi(30)
+    inviati = 0
+    for chat_id, nome, username, ultimo, giorni in inattivi:
+        medie = random.randint(5, 20)
+        pulsante = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🛒 Ordina ora", callback_data="qty:nuovo")
+        ]])
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=(
+                    f"👋 Ciao {nome}, dobbiamo parlare.\n\n"
+                    f"Ultimamente ci sentiamo poco... forse è arrivato il momento di spopperare "
+                    f"e calarsi {medie} medie 🍺"
+                ),
+                reply_markup=pulsante
+            )
+            inviati += 1
+        except Exception as e:
+            logging.warning(f"Impossibile inviare promemoria a {chat_id}: {e}")
+    logging.info(f"Promemoria inattivi: inviati {inviati} messaggi.")
