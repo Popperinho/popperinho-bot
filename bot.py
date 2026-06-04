@@ -122,7 +122,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nome = update.effective_user.first_name or "Cliente"
     await update.message.reply_text(
         f"👋 Ciao {nome}! Benvenuto da {NOME_NEGOZIO}.\n\n"
-        f"Scrivimi la tua domanda e un operatore ti risponderà il prima possibile! 😊"
+        f"Scrivi la tua richiesta d'ordine e verrai contattato in privato il prima possibile! 🫵"
     )
 
 async def ricevi_messaggio(update: Update, context: ContextTypes.DEFAULT_TYPE):
