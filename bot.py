@@ -15,9 +15,12 @@ OPERATORI = {
 
 NOME_NEGOZIO = "Popperinho Shop"
 DB_PATH = "richieste.db"
+PREZZO_UNITARIO = 20  # € per Popperinho
 
 logging.basicConfig(level=logging.INFO)
 
+
+# ── DATABASE ──────────────────────────────────────────────────────────────────
 
 def init_db():
     con = sqlite3.connect(DB_PATH)
@@ -31,7 +34,10 @@ def init_db():
             testo           TEXT NOT NULL,
             ricevuta_il     TEXT NOT NULL,
             presa_da        TEXT,
-            presa_il        TEXT
+            presa_il        TEXT,
+            ordine_completato INTEGER DEFAULT 0,
+            completato_il   TEXT,
+            completato_da   TEXT
         )
     """)
     cur.execute("""
@@ -43,6 +49,39 @@ def init_db():
             FOREIGN KEY (richiesta_id) REFERENCES richieste(id)
         )
     """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS clienti (
+            chat_id         INTEGER PRIMARY KEY,
+            nome            TEXT,
+            username        TEXT,
+            primo_contatto  TEXT,
+            ultimo_contatto TEXT
+        )
+    """)
+    for col, tipo in [
+        ("ordine_completato", "INTEGER DEFAULT 0"),
+        ("completato_il", "TEXT"),
+        ("completato_da", "TEXT"),
+    ]:
+        try:
+            cur.execute(f"ALTER TABLE richieste ADD COLUMN {col} {tipo}")
+        except:
+            pass
+    con.commit()
+    con.close()
+
+def registra_cliente(chat_id, nome, username):
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    ora = datetime.now().strftime("%d/%m/%Y %H:%M")
+    cur.execute("""
+        INSERT INTO clienti (chat_id, nome, username, primo_contatto, ultimo_contatto)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(chat_id) DO UPDATE SET
+            nome = excluded.nome,
+            username = excluded.username,
+            ultimo_contatto = excluded.ultimo_contatto
+    """, (chat_id, nome, username, ora, ora))
     con.commit()
     con.close()
 
@@ -83,6 +122,21 @@ def prendi_in_carico(richiesta_id, nome_operatore):
     con.close()
     return True, nome_operatore
 
+def completa_ordine(richiesta_id, nome_operatore):
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("SELECT ordine_completato FROM richieste WHERE id = ?", (richiesta_id,))
+    row = cur.fetchone()
+    if not row or row[0] == 1:
+        con.close()
+        return False
+    cur.execute("""
+        UPDATE richieste SET ordine_completato = 1, completato_il = ?, completato_da = ? WHERE id = ?
+    """, (datetime.now().strftime("%d/%m/%Y %H:%M"), nome_operatore, richiesta_id))
+    con.commit()
+    con.close()
+    return True
+
 def get_messaggi_operatori(richiesta_id):
     con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
@@ -104,25 +158,125 @@ def get_storico(limit=20, solo_aperte=False):
     cur = con.cursor()
     if solo_aperte:
         cur.execute("""
-            SELECT id, nome_cliente, username, testo, ricevuta_il, presa_da
+            SELECT id, nome_cliente, username, testo, ricevuta_il, presa_da, ordine_completato
             FROM richieste WHERE presa_da IS NULL
             ORDER BY id DESC LIMIT ?
         """, (limit,))
     else:
         cur.execute("""
-            SELECT id, nome_cliente, username, testo, ricevuta_il, presa_da
+            SELECT id, nome_cliente, username, testo, ricevuta_il, presa_da, ordine_completato
             FROM richieste ORDER BY id DESC LIMIT ?
         """, (limit,))
     rows = cur.fetchall()
     con.close()
     return rows
 
+def get_stats_clienti():
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("""
+        SELECT c.nome, c.username, c.chat_id, c.primo_contatto, c.ultimo_contatto,
+               COUNT(r.id) as tot_richieste,
+               SUM(CASE WHEN r.ordine_completato = 1 THEN 1 ELSE 0 END) as tot_ordini
+        FROM clienti c
+        LEFT JOIN richieste r ON r.chat_id_cliente = c.chat_id
+        GROUP BY c.chat_id
+        ORDER BY tot_ordini DESC, tot_richieste DESC
+    """)
+    rows = cur.fetchall()
+    con.close()
+    return rows
+
+def get_inattivi(giorni=30):
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("SELECT chat_id, nome, username, ultimo_contatto FROM clienti")
+    tutti = cur.fetchall()
+    con.close()
+    inattivi = []
+    ora = datetime.now()
+    for chat_id, nome, username, ultimo in tutti:
+        try:
+            dt = datetime.strptime(ultimo, "%d/%m/%Y %H:%M")
+            diff = (ora - dt).days
+            if diff >= giorni:
+                inattivi.append((chat_id, nome, username, ultimo, diff))
+        except:
+            pass
+    inattivi.sort(key=lambda x: x[4], reverse=True)
+    return inattivi
+
+def conta_clienti_totali():
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("SELECT COUNT(*) FROM clienti")
+    n = cur.fetchone()[0]
+    con.close()
+    return n
+
+def conta_ordini_totali():
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("SELECT COUNT(*) FROM richieste WHERE ordine_completato = 1")
+    n = cur.fetchone()[0]
+    con.close()
+    return n
+
+
+# ── TESTO E TASTIERA RICHIESTA ────────────────────────────────────────────────
+
+def build_testo(req):
+    rid, chat_id_cliente, nome_cliente, username, testo, ricevuta_il, presa_da, presa_il, ordine_completato, completato_il, completato_da = req
+    if presa_da is None:
+        stato = "⏳ *In attesa di essere presa in carico*"
+    elif ordine_completato:
+        stato = f"✅ Presa da: {presa_da} alle {presa_il}\n📦 *Ordine completato da: {completato_da}* alle {completato_il}"
+    else:
+        stato = f"✅ Presa da: {presa_da} alle {presa_il}\n🔄 *In lavorazione*"
+
+    return (
+        f"📩 *Richiesta #{rid}*\n\n"
+        f"👤 {nome_cliente}  |  {username}\n"
+        f"🕐 {ricevuta_il}\n\n"
+        f"💬 _{testo}_\n\n"
+        f"➡️ [Apri chat diretta](tg://user?id={chat_id_cliente})\n\n"
+        f"{stato}"
+    )
+
+def build_tastiera(req):
+    rid, _, _, _, _, _, presa_da, _, ordine_completato, _, _ = req
+    tasti = []
+    if presa_da is None:
+        tasti.append(InlineKeyboardButton("✅ Prendo in carico", callback_data=f"preso:{rid}"))
+    if presa_da is not None and not ordine_completato:
+        tasti.append(InlineKeyboardButton("📦 Ordine completato", callback_data=f"completato:{rid}"))
+    return InlineKeyboardMarkup([tasti]) if tasti else None
+
+def tastiera_quantita():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(f"1️⃣  →  {PREZZO_UNITARIO}€", callback_data="qty:1"),
+            InlineKeyboardButton(f"2️⃣  →  {PREZZO_UNITARIO*2}€", callback_data="qty:2"),
+        ],
+        [
+            InlineKeyboardButton(f"3️⃣  →  {PREZZO_UNITARIO*3}€", callback_data="qty:3"),
+            InlineKeyboardButton(f"4️⃣  →  {PREZZO_UNITARIO*4}€", callback_data="qty:4"),
+        ],
+        [
+            InlineKeyboardButton("✏️ Altre quantità o domande", callback_data="qty:altro"),
+        ],
+    ])
+
+
+# ── HANDLERS ──────────────────────────────────────────────────────────────────
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nome = update.effective_user.first_name or "Cliente"
     await update.message.reply_text(
         f"👋 Ciao {nome}! Benvenuto da {NOME_NEGOZIO}.\n\n"
-        f"Scrivi la tua richiesta d'ordine e verrai contattato in privato il prima possibile! 🫵"
+        f"Scrivi la tua richiesta d'ordine e verrai contattato in privato il prima possibile! 🫵\n\n"
+        f"Seleziona la quantità:",
+        reply_markup=tastiera_quantita()
     )
 
 async def ricevi_messaggio(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -135,29 +289,22 @@ async def ricevi_messaggio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     nome_cliente = (cliente.first_name or "") + (" " + cliente.last_name if cliente.last_name else "")
     username = f"@{cliente.username}" if cliente.username else "(senza username)"
+    nome_cliente = nome_cliente.strip()
 
-    richiesta_id = salva_richiesta(chat_id_cliente, nome_cliente.strip(), username, testo)
+    registra_cliente(chat_id_cliente, nome_cliente, username)
+    richiesta_id = salva_richiesta(chat_id_cliente, nome_cliente, username, testo)
 
-    tasto = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Prendo in carico", callback_data=f"preso:{richiesta_id}")
-    ]])
-
-    testo_operatori = (
-        f"📩 *Nuova richiesta #{richiesta_id}*\n\n"
-        f"👤 {nome_cliente.strip()}  |  {username}\n"
-        f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n"
-        f"💬 _{testo}_\n\n"
-        f"➡️ [Apri chat diretta](tg://user?id={chat_id_cliente})\n\n"
-        f"⏳ *In attesa di essere presa in carico*"
-    )
+    req = get_richiesta(richiesta_id)
+    testo_op = build_testo(req)
+    tastiera = build_tastiera(req)
 
     for op_chat_id in OPERATORI:
         try:
             msg = await context.bot.send_message(
                 chat_id=op_chat_id,
-                text=testo_operatori,
+                text=testo_op,
                 parse_mode="Markdown",
-                reply_markup=tasto
+                reply_markup=tastiera
             )
             salva_msg_operatore(richiesta_id, op_chat_id, msg.message_id)
         except Exception as e:
@@ -172,30 +319,92 @@ async def gestisci_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    if not query.data.startswith("preso:"):
+    # ── Selezione quantità dal cliente ──
+    if query.data.startswith("qty:"):
+        cliente = query.from_user
+        chat_id_cliente = query.message.chat_id
+        nome_cliente = (cliente.first_name or "") + (" " + cliente.last_name if cliente.last_name else "")
+        nome_cliente = nome_cliente.strip()
+        username = f"@{cliente.username}" if cliente.username else "(senza username)"
+        valore = query.data.split(":")[1]
+
+        if valore == "nuovo":
+            await query.edit_message_text(
+                "🛒 Seleziona la quantità per il nuovo ordine:",
+                reply_markup=tastiera_quantita()
+            )
+            return
+
+        if valore == "altro":
+            await query.edit_message_text(
+                "✏️ Scrivi pure la tua richiesta o domanda, ti risponderemo il prima possibile!"
+            )
+            return
+
+        quantita = int(valore)
+        totale = quantita * PREZZO_UNITARIO
+        testo_richiesta = f"Ordine: {quantita} Popperinho — Totale: {totale}€"
+
+        registra_cliente(chat_id_cliente, nome_cliente, username)
+        richiesta_id = salva_richiesta(chat_id_cliente, nome_cliente, username, testo_richiesta)
+
+        req = get_richiesta(richiesta_id)
+        testo_op = build_testo(req)
+        tastiera_op = build_tastiera(req)
+
+        for op_chat_id in OPERATORI:
+            try:
+                msg = await context.bot.send_message(
+                    chat_id=op_chat_id,
+                    text=testo_op,
+                    parse_mode="Markdown",
+                    reply_markup=tastiera_op
+                )
+                salva_msg_operatore(richiesta_id, op_chat_id, msg.message_id)
+            except Exception as e:
+                logging.warning(f"Errore invio a operatore {op_chat_id}: {e}")
+
+        pulsante_nuovo = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🛒 Piazza nuovo ordine", callback_data="qty:nuovo")
+        ]])
+        await query.edit_message_text(
+            f"🎉 Grazie! La tua richiesta è stata presa in carico.\n\n"
+            f"🛒 Quantità: *{quantita} Popperinho*\n"
+            f"💰 Totale: *{totale}€*\n\n"
+            f"Verrai contattato in privato al più presto! 🫵\n\n"
+            f"_Il pulsante qui sotto ti servirà la prossima volta che vuoi fare un nuovo ordine — il tuo ordine attuale è già partito! 👆_",
+            parse_mode="Markdown",
+            reply_markup=pulsante_nuovo
+        )
         return
 
-    richiesta_id = int(query.data.split(":")[1])
+    # ── Pulsanti operatori (prendo in carico / ordine completato) ──
     operatore_id = query.from_user.id
     nome_operatore = OPERATORI.get(operatore_id, query.from_user.first_name)
 
-    ok, chi = prendi_in_carico(richiesta_id, nome_operatore)
+    if query.data.startswith("preso:"):
+        richiesta_id = int(query.data.split(":")[1])
+        ok, chi = prendi_in_carico(richiesta_id, nome_operatore)
+        if not ok:
+            await query.answer(f"⚠️ Già presa in carico da {chi}", show_alert=True)
+            return
+
+    elif query.data.startswith("completato:"):
+        richiesta_id = int(query.data.split(":")[1])
+        ok = completa_ordine(richiesta_id, nome_operatore)
+        if not ok:
+            await query.answer("⚠️ Ordine già segnato come completato", show_alert=True)
+            return
+
+    else:
+        return
 
     req = get_richiesta(richiesta_id)
     if not req:
         return
-    _, chat_id_cliente, nome_cliente, username, testo, ricevuta_il, presa_da, presa_il = req
 
-    stato = f"✅ *Presa in carico da: {nome_operatore}* alle {presa_il}" if ok else f"⚠️ Già presa in carico da: {chi}"
-
-    testo_aggiornato = (
-        f"📩 *Richiesta #{richiesta_id}*\n\n"
-        f"👤 {nome_cliente}  |  {username}\n"
-        f"🕐 {ricevuta_il}\n\n"
-        f"💬 _{testo}_\n\n"
-        f"➡️ [Apri chat diretta](tg://user?id={chat_id_cliente})\n\n"
-        f"{stato}"
-    )
+    testo_aggiornato = build_testo(req)
+    tastiera = build_tastiera(req)
 
     for op_chat_id, msg_id in get_messaggi_operatori(richiesta_id):
         try:
@@ -204,7 +413,7 @@ async def gestisci_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 message_id=msg_id,
                 text=testo_aggiornato,
                 parse_mode="Markdown",
-                reply_markup=None
+                reply_markup=tastiera
             )
         except Exception as e:
             logging.warning(f"Errore aggiornamento {op_chat_id}: {e}")
@@ -223,12 +432,86 @@ async def cmd_storico(update: Update, context: ContextTypes.DEFAULT_TYPE):
     titolo = "📋 *Richieste aperte:*\n\n" if solo_aperte else "📋 *Ultime 20 richieste:*\n\n"
     righe = []
     for r in richieste:
-        rid, nome, uname, testo, ricevuta_il, presa_da = r
-        stato = f"✅ {presa_da}" if presa_da else "⏳ In attesa"
+        rid, nome, uname, testo, ricevuta_il, presa_da, ordine_completato = r
+        if ordine_completato:
+            stato = "📦 Completato"
+        elif presa_da:
+            stato = f"🔄 {presa_da}"
+        else:
+            stato = "⏳ In attesa"
         anteprima = testo[:60] + ("…" if len(testo) > 60 else "")
         righe.append(f"*#{rid}* — {nome} ({uname})\n🕐 {ricevuta_il} | {stato}\n💬 _{anteprima}_")
 
     await update.message.reply_text(titolo + "\n\n".join(righe), parse_mode="Markdown")
+
+async def cmd_clienti(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in OPERATORI:
+        return
+    stats = get_stats_clienti()
+    tot_clienti = conta_clienti_totali()
+    tot_ordini = conta_ordini_totali()
+
+    if not stats:
+        await update.message.reply_text("Nessun cliente ancora.")
+        return
+
+    righe = []
+    for i, (nome, username, chat_id, primo, ultimo, tot_r, tot_o) in enumerate(stats[:15], 1):
+        righe.append(
+            f"{i}. *{nome}* ({username})\n"
+            f"   📩 {tot_r} richieste  |  📦 {tot_o or 0} ordini\n"
+            f"   🕐 Ultimo contatto: {ultimo}"
+        )
+
+    testo = (
+        f"👥 *Clienti totali: {tot_clienti}*\n"
+        f"📦 *Ordini completati: {tot_ordini}*\n\n"
+        + "\n\n".join(righe)
+    )
+    await update.message.reply_text(testo, parse_mode="Markdown")
+
+async def cmd_top(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in OPERATORI:
+        return
+    stats = get_stats_clienti()
+    top = [s for s in stats if (s[6] or 0) > 0][:10]
+
+    if not top:
+        await update.message.reply_text("Nessun ordine completato ancora.")
+        return
+
+    righe = []
+    medaglie = ["🥇", "🥈", "🥉"]
+    for i, (nome, username, chat_id, primo, ultimo, tot_r, tot_o) in enumerate(top):
+        medaglia = medaglie[i] if i < 3 else f"{i+1}."
+        righe.append(f"{medaglia} *{nome}* — {tot_o} ordini  |  {tot_r} richieste")
+
+    await update.message.reply_text(
+        "🏆 *Top clienti per ordini:*\n\n" + "\n".join(righe),
+        parse_mode="Markdown"
+    )
+
+async def cmd_inattivi(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in OPERATORI:
+        return
+    inattivi = get_inattivi(30)
+
+    if not inattivi:
+        await update.message.reply_text("Nessun cliente inattivo da più di 30 giorni. 🎉")
+        return
+
+    righe = []
+    for chat_id, nome, username, ultimo, giorni in inattivi[:15]:
+        righe.append(
+            f"👤 *{nome}* ({username})\n"
+            f"   Inattivo da *{giorni} giorni* (ultimo: {ultimo})\n"
+            f"   ➡️ [Scrivi ora](tg://user?id={chat_id})"
+        )
+
+    await update.message.reply_text(
+        "😴 *Clienti inattivi da 30+ giorni:*\n\n" + "\n\n".join(righe),
+        parse_mode="Markdown"
+    )
 
 async def cmd_aiuto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in OPERATORI:
@@ -237,6 +520,9 @@ async def cmd_aiuto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📖 *Comandi disponibili:*\n\n"
         "/storico — ultime 20 richieste\n"
         "/storico aperte — solo quelle in attesa\n"
+        "/clienti — tutti i clienti con richieste e ordini\n"
+        "/top — classifica clienti per ordini\n"
+        "/inattivi — chi non scrive da 30+ giorni\n"
         "/aiuto — mostra questo messaggio",
         parse_mode="Markdown"
     )
@@ -246,6 +532,9 @@ def main():
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("storico", cmd_storico))
+    app.add_handler(CommandHandler("clienti", cmd_clienti))
+    app.add_handler(CommandHandler("top", cmd_top))
+    app.add_handler(CommandHandler("inattivi", cmd_inattivi))
     app.add_handler(CommandHandler("aiuto", cmd_aiuto))
     app.add_handler(CallbackQueryHandler(gestisci_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ricevi_messaggio))
