@@ -300,7 +300,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nome = update.effective_user.first_name or "Cliente"
     await update.message.reply_text(
         f"👋 Ciao {nome}! Benvenuto da {NOME_NEGOZIO}.\n\n"
-        f"Scrivi la tua richiesta d'ordine e verrai contattato in privato il prima possibile! 🫵\n\n"
+        f"Scrivi la tua richiesta d'ordine e verrai contattato in privato il prima possibile e ricorda, ogni mese il cliente con più ordini finisce sull'etichetta della limited edition 🫵\n\n"
         f"Seleziona la quantità:",
         reply_markup=tastiera_quantita()
     )
