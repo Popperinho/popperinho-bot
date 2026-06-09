@@ -59,6 +59,12 @@ def init_db():
             ultimo_contatto TEXT
         )
     """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS impostazioni (
+            chiave TEXT PRIMARY KEY,
+            valore TEXT
+        )
+    """)
     for col, tipo in [
         ("ordine_completato", "INTEGER DEFAULT 0"),
         ("completato_il", "TEXT"),
@@ -68,6 +74,21 @@ def init_db():
             cur.execute(f"ALTER TABLE richieste ADD COLUMN {col} {tipo}")
         except:
             pass
+    con.commit()
+    con.close()
+
+def get_impostazione(chiave):
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("SELECT valore FROM impostazioni WHERE chiave = ?", (chiave,))
+    row = cur.fetchone()
+    con.close()
+    return row[0] if row else None
+
+def set_impostazione(chiave, valore):
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("INSERT OR REPLACE INTO impostazioni (chiave, valore) VALUES (?, ?)", (chiave, valore))
     con.commit()
     con.close()
 
@@ -298,21 +319,26 @@ async def invia_promemoria_inattivi(context: ContextTypes.DEFAULT_TYPE):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nome = update.effective_user.first_name or "Cliente"
-    await update.message.reply_text(
-        f"👋 Ciao {nome}! Benvenuto da {NOME_NEGOZIO}.\n\n"
-        f"Scrivi la tua richiesta d'ordine e verrai contattato in privato il prima possibile! 🫵\n\n"
-        f"Seleziona la quantità:",
-        reply_markup=tastiera_quantita()
-    )
+    video_id = get_impostazione("video_benvenuto")
+    if video_id:
+        try:
+            await update.message.reply_video(video=video_id)
+        except Exception as e:
+            logging.warning("Errore invio video benvenuto: " + str(e))
+    testo_benvenuto = "👋 Ciao " + nome + "! Benvenuto da " + NOME_NEGOZIO + ".\n\nScrivi la tua richiesta d'ordine e verrai contattato in privato il prima possibile! 🫵\n\nSeleziona la quantità:"
+    await update.message.reply_text(testo_benvenuto, reply_markup=tastiera_quantita())
 
-async def ricevi_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cmd_setvideo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in OPERATORI:
         return
     video = update.message.video or update.message.document
-    if video:
-        file_id = video.file_id
-        msg = "file_id del video:\n\n" + file_id
-        await update.message.reply_text(msg)
+    if not video:
+        await update.message.reply_text(
+            "📎 Manda il video e scrivi /setvideo nella didascalia per impostarlo come video di benvenuto."
+        )
+        return
+    set_impostazione("video_benvenuto", video.file_id)
+    await update.message.reply_text("✅ Video di benvenuto impostato! Ogni nuovo cliente lo riceverà all'avvio.")
 
 async def ricevi_messaggio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id in OPERATORI:
@@ -558,6 +584,7 @@ async def cmd_aiuto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/clienti — tutti i clienti con richieste e ordini\n"
         "/top — classifica clienti per ordini\n"
         "/inattivi — chi non scrive da 28+ giorni\n"
+        "/setvideo — imposta il video di benvenuto (allega il video al comando)\n"
         "/aiuto — mostra questo messaggio",
         parse_mode="Markdown"
     )
@@ -575,7 +602,8 @@ def main():
     app.add_handler(CommandHandler("inattivi", cmd_inattivi))
     app.add_handler(CommandHandler("aiuto", cmd_aiuto))
     app.add_handler(CallbackQueryHandler(gestisci_callback))
-    app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, ricevi_video))
+    app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, cmd_setvideo))
+    app.add_handler(CommandHandler("setvideo", cmd_setvideo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ricevi_messaggio))
     # Promemoria automatico ogni 28 giorni alle 21:00
     app.job_queue.run_repeating(
