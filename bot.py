@@ -300,10 +300,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nome = update.effective_user.first_name or "Cliente"
     await update.message.reply_text(
         f"👋 Ciao {nome}! Benvenuto da {NOME_NEGOZIO}.\n\n"
-        f"Scrivi la tua richiesta d'ordine e verrai contattato in privato il prima possibile e ricorda, ogni mese il cliente con più ordini finisce sull'etichetta della limited edition 🫵\n\n"
+        f"Scrivi la tua richiesta d'ordine e verrai contattato in privato il prima possibile! 🫵\n\n"
         f"Seleziona la quantità:",
         reply_markup=tastiera_quantita()
     )
+
+async def ricevi_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in OPERATORI:
+        return
+    video = update.message.video or update.message.document
+    if video:
+        file_id = video.file_id
+        msg = "file_id del video:\n\n" + file_id
+        await update.message.reply_text(msg)
 
 async def ricevi_messaggio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id in OPERATORI:
@@ -566,6 +575,7 @@ def main():
     app.add_handler(CommandHandler("inattivi", cmd_inattivi))
     app.add_handler(CommandHandler("aiuto", cmd_aiuto))
     app.add_handler(CallbackQueryHandler(gestisci_callback))
+    app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, ricevi_video))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ricevi_messaggio))
     # Promemoria automatico ogni 28 giorni alle 21:00
     app.job_queue.run_repeating(
