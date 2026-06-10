@@ -574,6 +574,41 @@ async def cmd_inattivi(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
+async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in OPERATORI:
+        return
+    testo = update.message.text.replace("/broadcast", "").strip()
+    if not testo:
+        await update.message.reply_text("📢 Scrivi il messaggio dopo il comando.\nEsempio:\n/broadcast Ciao a tutti, novita in arrivo!")
+        return
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("SELECT chat_id, nome FROM clienti")
+    clienti = cur.fetchall()
+    con.close()
+    if not clienti:
+        await update.message.reply_text("Nessun cliente registrato.")
+        return
+    inviati = 0
+    falliti = 0
+    messaggio = "👑 *King del Popper*\n\n" + testo
+    pulsante = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🛒 Ordina ora", callback_data="qty:nuovo")
+    ]])
+    for chat_id, nome in clienti:
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=messaggio,
+                parse_mode="Markdown",
+                reply_markup=pulsante
+            )
+            inviati += 1
+        except Exception as e:
+            logging.warning("Broadcast fallito per " + str(chat_id) + ": " + str(e))
+            falliti += 1
+    await update.message.reply_text("📢 Broadcast completato!\n\nInviati: " + str(inviati) + "\nFalliti: " + str(falliti))
+
 async def cmd_aiuto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in OPERATORI:
         return
@@ -604,6 +639,7 @@ def main():
     app.add_handler(CallbackQueryHandler(gestisci_callback))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, cmd_setvideo))
     app.add_handler(CommandHandler("setvideo", cmd_setvideo))
+    app.add_handler(CommandHandler("broadcast", cmd_broadcast))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ricevi_messaggio))
     # Promemoria automatico ogni 28 giorni alle 21:00
     app.job_queue.run_repeating(
