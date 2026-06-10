@@ -325,7 +325,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_video(video=video_id)
         except Exception as e:
             logging.warning("Errore invio video benvenuto: " + str(e))
-    testo_benvenuto = "👋 Ciao " + nome + "! Benvenuto da " + NOME_NEGOZIO + ".\n\nScrivi la tua richiesta d'ordine e verrai contattato in privato il prima possibile! 🫵\n\nSeleziona la quantità:"
+    testo_benvenuto = "👋 Ciao " + nome + "! Benvenuto dal King del Popper👑\n\nScrivi la tua richiesta d'ordine e verrai contattato in privato il prima possibile! 🫵\n\nSeleziona la quantità:"
     await update.message.reply_text(testo_benvenuto, reply_markup=tastiera_quantita())
 
 async def cmd_setvideo(update: Update, context: ContextTypes.DEFAULT_TYPE):
