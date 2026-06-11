@@ -65,13 +65,20 @@ def init_db():
             valore TEXT
         )
     """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS blacklist (
+            chat_id INTEGER PRIMARY KEY,
+            nome    TEXT,
+            aggiunto_il TEXT
+        )
+    """)
     for col, tipo in [
         ("ordine_completato", "INTEGER DEFAULT 0"),
         ("completato_il", "TEXT"),
         ("completato_da", "TEXT"),
     ]:
         try:
-            cur.execute(f"ALTER TABLE richieste ADD COLUMN {col} {tipo}")
+            cur.execute("ALTER TABLE richieste ADD COLUMN " + col + " " + tipo)
         except:
             pass
     con.commit()
@@ -91,6 +98,37 @@ def set_impostazione(chiave, valore):
     cur.execute("INSERT OR REPLACE INTO impostazioni (chiave, valore) VALUES (?, ?)", (chiave, valore))
     con.commit()
     con.close()
+
+def is_blacklisted(chat_id):
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("SELECT 1 FROM blacklist WHERE chat_id = ?", (chat_id,))
+    row = cur.fetchone()
+    con.close()
+    return row is not None
+
+def aggiungi_blacklist(chat_id, nome):
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("INSERT OR REPLACE INTO blacklist (chat_id, nome, aggiunto_il) VALUES (?, ?, ?)",
+                (chat_id, nome, datetime.now().strftime("%d/%m/%Y %H:%M")))
+    con.commit()
+    con.close()
+
+def rimuovi_blacklist(chat_id):
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("DELETE FROM blacklist WHERE chat_id = ?", (chat_id,))
+    con.commit()
+    con.close()
+
+def get_blacklist():
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("SELECT chat_id, nome, aggiunto_il FROM blacklist")
+    rows = cur.fetchall()
+    con.close()
+    return rows
 
 def registra_cliente(chat_id, nome, username):
     con = sqlite3.connect(DB_PATH)
@@ -250,41 +288,41 @@ def conta_ordini_totali():
 def build_testo(req):
     rid, chat_id_cliente, nome_cliente, username, testo, ricevuta_il, presa_da, presa_il, ordine_completato, completato_il, completato_da = req
     if presa_da is None:
-        stato = "⏳ *In attesa di essere presa in carico*"
+        stato = "Stato: In attesa"
     elif ordine_completato:
-        stato = f"✅ Presa da: {presa_da} alle {presa_il}\n📦 *Ordine completato da: {completato_da}* alle {completato_il}"
+        stato = "Presa da: " + presa_da + " alle " + presa_il + "\nOrdine completato da: " + completato_da + " alle " + completato_il
     else:
-        stato = f"✅ Presa da: {presa_da} alle {presa_il}\n🔄 *In lavorazione*"
+        stato = "Presa da: " + presa_da + " alle " + presa_il + "\nIn lavorazione"
     return (
-        f"📩 *Richiesta #{rid}*\n\n"
-        f"👤 {nome_cliente}  |  {username}\n"
-        f"🕐 {ricevuta_il}\n\n"
-        f"💬 _{testo}_\n\n"
-        f"➡️ [Apri chat diretta](tg://user?id={chat_id_cliente})\n\n"
-        f"{stato}"
+        "Richiesta #" + str(rid) + "\n\n"
+        + "Cliente: " + nome_cliente + "  |  " + username + "\n"
+        + "Ora: " + ricevuta_il + "\n\n"
+        + "Messaggio: " + testo + "\n\n"
+        + "Apri chat: tg://user?id=" + str(chat_id_cliente) + "\n\n"
+        + stato
     )
 
 def build_tastiera(req):
     rid, _, _, _, _, _, presa_da, _, ordine_completato, _, _ = req
     tasti = []
     if presa_da is None:
-        tasti.append(InlineKeyboardButton("✅ Prendo in carico", callback_data=f"preso:{rid}"))
+        tasti.append(InlineKeyboardButton("Prendo in carico", callback_data="preso:" + str(rid)))
     if presa_da is not None and not ordine_completato:
-        tasti.append(InlineKeyboardButton("📦 Ordine completato", callback_data=f"completato:{rid}"))
+        tasti.append(InlineKeyboardButton("Ordine completato", callback_data="completato:" + str(rid)))
     return InlineKeyboardMarkup([tasti]) if tasti else None
 
 def tastiera_quantita():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton(f"1️⃣  →  {PREZZO_UNITARIO}€", callback_data="qty:1"),
-            InlineKeyboardButton(f"2️⃣  →  {PREZZO_UNITARIO*2}€", callback_data="qty:2"),
+            InlineKeyboardButton("1  ->  " + str(PREZZO_UNITARIO) + "euro", callback_data="qty:1"),
+            InlineKeyboardButton("2  ->  " + str(PREZZO_UNITARIO*2) + "euro", callback_data="qty:2"),
         ],
         [
-            InlineKeyboardButton(f"3️⃣  →  {PREZZO_UNITARIO*3}€", callback_data="qty:3"),
-            InlineKeyboardButton(f"4️⃣  →  {PREZZO_UNITARIO*4}€", callback_data="qty:4"),
+            InlineKeyboardButton("3  ->  " + str(PREZZO_UNITARIO*3) + "euro", callback_data="qty:3"),
+            InlineKeyboardButton("4  ->  " + str(PREZZO_UNITARIO*4) + "euro", callback_data="qty:4"),
         ],
         [
-            InlineKeyboardButton("✏️ Altre quantità o domande", callback_data="qty:altro"),
+            InlineKeyboardButton("Altre quantita o domande", callback_data="qty:altro"),
         ],
     ])
 
@@ -297,22 +335,18 @@ async def invia_promemoria_inattivi(context: ContextTypes.DEFAULT_TYPE):
     for chat_id, nome, username, ultimo, giorni in inattivi:
         medie = random.randint(5, 20)
         pulsante = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🛒 Ordina ora", callback_data="qty:nuovo")
+            InlineKeyboardButton("Ordina ora", callback_data="qty:nuovo")
         ]])
         try:
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=(
-                    f"👋 Ciao {nome}, dobbiamo parlare.\n\n"
-                    f"Ultimamente ci sentiamo poco... forse è arrivato il momento di spopperare "
-                    f"e calarsi {medie} medie 🍺"
-                ),
+                text="Ciao " + nome + ", dobbiamo parlare.\n\nUltimamente ci sentiamo poco... forse e arrivato il momento di spopperare e calarsi " + str(medie) + " medie",
                 reply_markup=pulsante
             )
             inviati += 1
         except Exception as e:
-            logging.warning(f"Impossibile inviare promemoria a {chat_id}: {e}")
-    logging.info(f"Promemoria inattivi: inviati {inviati} messaggi.")
+            logging.warning("Impossibile inviare promemoria a " + str(chat_id) + ": " + str(e))
+    logging.info("Promemoria inattivi: inviati " + str(inviati) + " messaggi.")
 
 
 # ── HANDLERS ──────────────────────────────────────────────────────────────────
@@ -325,23 +359,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_video(video=video_id)
         except Exception as e:
             logging.warning("Errore invio video benvenuto: " + str(e))
-    testo_benvenuto = "👋 Ciao " + nome + "! Benvenuto dal King del Popper👑\n\nScrivi la tua richiesta d'ordine e verrai contattato in privato il prima possibile! 🫵\n\nSeleziona la quantità:"
-    await update.message.reply_text(testo_benvenuto, reply_markup=tastiera_quantita())
+    await update.message.reply_text(
+        "Ciao " + nome + "! Benvenuto dal King del Popper\n\nScrivi la tua richiesta d'ordine e verrai contattato in privato il prima possibile!\n\nSeleziona la quantita:",
+        reply_markup=tastiera_quantita()
+    )
 
 async def cmd_setvideo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in OPERATORI:
         return
     video = update.message.video or update.message.document
     if not video:
-        await update.message.reply_text(
-            "📎 Manda il video e scrivi /setvideo nella didascalia per impostarlo come video di benvenuto."
-        )
+        await update.message.reply_text("Manda il video e scrivi /setvideo nella didascalia per impostarlo come video di benvenuto.")
         return
     set_impostazione("video_benvenuto", video.file_id)
-    await update.message.reply_text("✅ Video di benvenuto impostato! Ogni nuovo cliente lo riceverà all'avvio.")
+    await update.message.reply_text("Video di benvenuto impostato! Ogni nuovo cliente lo ricevera all'avvio.")
 
 async def ricevi_messaggio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id in OPERATORI:
+        return
+    if is_blacklisted(update.effective_user.id):
         return
 
     cliente = update.effective_user
@@ -349,7 +385,7 @@ async def ricevi_messaggio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     testo = update.message.text
 
     nome_cliente = (cliente.first_name or "") + (" " + cliente.last_name if cliente.last_name else "")
-    username = f"@{cliente.username}" if cliente.username else "(senza username)"
+    username = "@" + cliente.username if cliente.username else "(senza username)"
     nome_cliente = nome_cliente.strip()
 
     registra_cliente(chat_id_cliente, nome_cliente, username)
@@ -364,47 +400,39 @@ async def ricevi_messaggio(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg = await context.bot.send_message(
                 chat_id=op_chat_id,
                 text=testo_op,
-                parse_mode="Markdown",
                 reply_markup=tastiera
             )
             salva_msg_operatore(richiesta_id, op_chat_id, msg.message_id)
         except Exception as e:
-            logging.warning(f"Errore invio a operatore {op_chat_id}: {e}")
+            logging.warning("Errore invio a operatore " + str(op_chat_id) + ": " + str(e))
 
-    await update.message.reply_text(
-        "✅ Messaggio ricevuto! Ti risponderemo il prima possibile.\n"
-        "⏱️ Siamo di solito disponibili entro poche ore."
-    )
+    await update.message.reply_text("Messaggio ricevuto! Ti risponderemo il prima possibile.")
 
 async def gestisci_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    # ── Selezione quantità dal cliente ──
     if query.data.startswith("qty:"):
+        if is_blacklisted(query.from_user.id):
+            return
         cliente = query.from_user
         chat_id_cliente = query.message.chat_id
         nome_cliente = (cliente.first_name or "") + (" " + cliente.last_name if cliente.last_name else "")
         nome_cliente = nome_cliente.strip()
-        username = f"@{cliente.username}" if cliente.username else "(senza username)"
+        username = "@" + cliente.username if cliente.username else "(senza username)"
         valore = query.data.split(":")[1]
 
         if valore == "nuovo":
-            await query.edit_message_text(
-                "🛒 Seleziona la quantità per il nuovo ordine:",
-                reply_markup=tastiera_quantita()
-            )
+            await query.edit_message_text("Seleziona la quantita per il nuovo ordine:", reply_markup=tastiera_quantita())
             return
 
         if valore == "altro":
-            await query.edit_message_text(
-                "✏️ Scrivi pure la tua richiesta o domanda, ti risponderemo il prima possibile!"
-            )
+            await query.edit_message_text("Scrivi pure la tua richiesta o domanda, ti risponderemo il prima possibile!")
             return
 
         quantita = int(valore)
         totale = quantita * PREZZO_UNITARIO
-        testo_richiesta = f"Ordine: {quantita} Popperinho — Totale: {totale}€"
+        testo_richiesta = "Ordine: " + str(quantita) + " Popperinho - Totale: " + str(totale) + " euro"
 
         registra_cliente(chat_id_cliente, nome_cliente, username)
         richiesta_id = salva_richiesta(chat_id_cliente, nome_cliente, username, testo_richiesta)
@@ -418,28 +446,25 @@ async def gestisci_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 msg = await context.bot.send_message(
                     chat_id=op_chat_id,
                     text=testo_op,
-                    parse_mode="Markdown",
                     reply_markup=tastiera_op
                 )
                 salva_msg_operatore(richiesta_id, op_chat_id, msg.message_id)
             except Exception as e:
-                logging.warning(f"Errore invio a operatore {op_chat_id}: {e}")
+                logging.warning("Errore invio a operatore " + str(op_chat_id) + ": " + str(e))
 
         pulsante_nuovo = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🛒 Piazza nuovo ordine", callback_data="qty:nuovo")
+            InlineKeyboardButton("Piazza nuovo ordine", callback_data="qty:nuovo")
         ]])
         await query.edit_message_text(
-            f"🎉 Grazie! La tua richiesta è stata presa in carico.\n\n"
-            f"🛒 Quantità: *{quantita} Popperinho*\n"
-            f"💰 Totale: *{totale}€*\n\n"
-            f"Verrai contattato in privato al più presto! 🫵\n\n"
-            f"_Il pulsante qui sotto ti servirà la prossima volta che vuoi fare un nuovo ordine — il tuo ordine attuale è già partito! 👆_",
-            parse_mode="Markdown",
+            "Grazie! La tua richiesta e stata presa in carico.\n\n"
+            "Quantita: " + str(quantita) + " Popperinho\n"
+            "Totale: " + str(totale) + " euro\n\n"
+            "Verrai contattato in privato al piu presto!\n\n"
+            "Il pulsante qui sotto ti servira la prossima volta che vuoi fare un nuovo ordine - il tuo ordine attuale e gia partito!",
             reply_markup=pulsante_nuovo
         )
         return
 
-    # ── Pulsanti operatori ──
     operatore_id = query.from_user.id
     nome_operatore = OPERATORI.get(operatore_id, query.from_user.first_name)
 
@@ -447,16 +472,27 @@ async def gestisci_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         richiesta_id = int(query.data.split(":")[1])
         ok, chi = prendi_in_carico(richiesta_id, nome_operatore)
         if not ok:
-            await query.answer(f"⚠️ Già presa in carico da {chi}", show_alert=True)
+            await query.answer("Gia presa in carico da " + chi, show_alert=True)
             return
 
     elif query.data.startswith("completato:"):
         richiesta_id = int(query.data.split(":")[1])
         ok = completa_ordine(richiesta_id, nome_operatore)
         if not ok:
-            await query.answer("⚠️ Ordine già segnato come completato", show_alert=True)
+            await query.answer("Ordine gia segnato come completato", show_alert=True)
             return
-
+        req_temp = get_richiesta(richiesta_id)
+        if req_temp:
+            chat_id_cliente = req_temp[1]
+            bot_info = await context.bot.get_me()
+            link_bot = "https://t.me/" + bot_info.username
+            try:
+                await context.bot.send_message(
+                    chat_id=chat_id_cliente,
+                    text="Chi non spoppera in compagnia e un ladro o una spia, manda il link a un amico!\n\n" + link_bot
+                )
+            except Exception as e:
+                logging.warning("Errore invio messaggio referral: " + str(e))
     else:
         return
 
@@ -473,11 +509,10 @@ async def gestisci_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=op_chat_id,
                 message_id=msg_id,
                 text=testo_aggiornato,
-                parse_mode="Markdown",
                 reply_markup=tastiera
             )
         except Exception as e:
-            logging.warning(f"Errore aggiornamento {op_chat_id}: {e}")
+            logging.warning("Errore aggiornamento " + str(op_chat_id) + ": " + str(e))
 
 async def cmd_storico(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in OPERATORI:
@@ -490,20 +525,29 @@ async def cmd_storico(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Nessuna richiesta trovata.")
         return
 
-    titolo = "📋 *Richieste aperte:*\n\n" if solo_aperte else "📋 *Ultime 20 richieste:*\n\n"
+    titolo = "Richieste aperte:\n\n" if solo_aperte else "Ultime 20 richieste:\n\n"
     righe = []
     for r in richieste:
         rid, nome, uname, testo, ricevuta_il, presa_da, ordine_completato = r
         if ordine_completato:
-            stato = "📦 Completato"
+            stato = "Completato"
         elif presa_da:
-            stato = f"🔄 {presa_da}"
+            stato = "In lavorazione - " + presa_da
         else:
-            stato = "⏳ In attesa"
-        anteprima = testo[:60] + ("…" if len(testo) > 60 else "")
-        righe.append(f"*#{rid}* — {nome} ({uname})\n🕐 {ricevuta_il} | {stato}\n💬 _{anteprima}_")
+            stato = "In attesa"
+        anteprima = testo[:50] + ("..." if len(testo) > 50 else "")
+        righe.append("#" + str(rid) + " - " + (nome or "?") + " | " + stato + "\n" + ricevuta_il + " - " + anteprima)
 
-    await update.message.reply_text(titolo + "\n\n".join(righe), parse_mode="Markdown")
+    # Manda a pezzi se troppo lungo
+    testo_completo = titolo
+    blocco = ""
+    for riga in righe:
+        if len(testo_completo) + len(blocco) + len(riga) > 3800:
+            await update.message.reply_text(testo_completo + blocco)
+            testo_completo = ""
+            blocco = ""
+        blocco += riga + "\n\n"
+    await update.message.reply_text(testo_completo + blocco)
 
 async def cmd_clienti(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in OPERATORI:
@@ -519,17 +563,13 @@ async def cmd_clienti(update: Update, context: ContextTypes.DEFAULT_TYPE):
     righe = []
     for i, (nome, username, chat_id, primo, ultimo, tot_r, tot_o) in enumerate(stats[:15], 1):
         righe.append(
-            f"{i}. *{nome}* ({username})\n"
-            f"   📩 {tot_r} richieste  |  📦 {tot_o or 0} ordini\n"
-            f"   🕐 Ultimo contatto: {ultimo}"
+            str(i) + ". " + (nome or "?") + " (" + (username or "?") + ")\n"
+            "   Richieste: " + str(tot_r) + "  |  Ordini: " + str(tot_o or 0) + "\n"
+            "   Ultimo contatto: " + (ultimo or "?")
         )
 
-    testo = (
-        f"👥 *Clienti totali: {tot_clienti}*\n"
-        f"📦 *Ordini completati: {tot_ordini}*\n\n"
-        + "\n\n".join(righe)
-    )
-    await update.message.reply_text(testo, parse_mode="Markdown")
+    testo = "Clienti totali: " + str(tot_clienti) + "\nOrdini completati: " + str(tot_ordini) + "\n\n" + "\n\n".join(righe)
+    await update.message.reply_text(testo)
 
 async def cmd_top(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in OPERATORI:
@@ -542,15 +582,12 @@ async def cmd_top(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     righe = []
-    medaglie = ["🥇", "🥈", "🥉"]
+    medaglie = ["1.", "2.", "3."]
     for i, (nome, username, chat_id, primo, ultimo, tot_r, tot_o) in enumerate(top):
-        medaglia = medaglie[i] if i < 3 else f"{i+1}."
-        righe.append(f"{medaglia} *{nome}* — {tot_o} ordini  |  {tot_r} richieste")
+        medaglia = medaglie[i] if i < 3 else str(i+1) + "."
+        righe.append(medaglia + " " + (nome or "?") + " - " + str(tot_o) + " ordini | " + str(tot_r) + " richieste")
 
-    await update.message.reply_text(
-        "🏆 *Top clienti per ordini:*\n\n" + "\n".join(righe),
-        parse_mode="Markdown"
-    )
+    await update.message.reply_text("Top clienti per ordini:\n\n" + "\n".join(righe))
 
 async def cmd_inattivi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in OPERATORI:
@@ -558,32 +595,29 @@ async def cmd_inattivi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     inattivi = get_inattivi(28)
 
     if not inattivi:
-        await update.message.reply_text("Nessun cliente inattivo da più di 28 giorni. 🎉")
+        await update.message.reply_text("Nessun cliente inattivo da piu di 28 giorni.")
         return
 
     righe = []
     for chat_id, nome, username, ultimo, giorni in inattivi[:15]:
         righe.append(
-            f"👤 *{nome}* ({username})\n"
-            f"   Inattivo da *{giorni} giorni* (ultimo: {ultimo})\n"
-            f"   ➡️ [Scrivi ora](tg://user?id={chat_id})"
+            (nome or "?") + " (" + (username or "?") + ")\n"
+            "Inattivo da " + str(giorni) + " giorni (ultimo: " + (ultimo or "?") + ")\n"
+            "tg://user?id=" + str(chat_id)
         )
 
-    await update.message.reply_text(
-        "😴 *Clienti inattivi da 28+ giorni:*\n\n" + "\n\n".join(righe),
-        parse_mode="Markdown"
-    )
+    await update.message.reply_text("Clienti inattivi da 28+ giorni:\n\n" + "\n\n".join(righe))
 
 async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in OPERATORI:
         return
     testo = update.message.text.replace("/broadcast", "").strip()
     if not testo:
-        await update.message.reply_text("📢 Scrivi il messaggio dopo il comando.\nEsempio:\n/broadcast Ciao a tutti, novita in arrivo!")
+        await update.message.reply_text("Scrivi il messaggio dopo il comando.\nEsempio:\n/broadcast Ciao a tutti, novita in arrivo!")
         return
     con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
-    cur.execute("SELECT chat_id, nome FROM clienti")
+    cur.execute("SELECT chat_id FROM clienti")
     clienti = cur.fetchall()
     con.close()
     if not clienti:
@@ -591,37 +625,99 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     inviati = 0
     falliti = 0
-    messaggio = "👑 *King del Popper*\n\n" + testo
     pulsante = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🛒 Ordina ora", callback_data="qty:nuovo")
+        InlineKeyboardButton("Ordina ora", callback_data="qty:nuovo")
     ]])
-    for chat_id, nome in clienti:
+    for (chat_id,) in clienti:
         try:
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=messaggio,
-                parse_mode="Markdown",
+                text="King del Popper\n\n" + testo,
                 reply_markup=pulsante
             )
             inviati += 1
         except Exception as e:
             logging.warning("Broadcast fallito per " + str(chat_id) + ": " + str(e))
             falliti += 1
-    await update.message.reply_text("📢 Broadcast completato!\n\nInviati: " + str(inviati) + "\nFalliti: " + str(falliti))
+    await update.message.reply_text("Broadcast completato!\n\nInviati: " + str(inviati) + "\nFalliti: " + str(falliti))
+
+async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in OPERATORI:
+        return
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    mese_corrente = datetime.now().strftime("%m/%Y")
+    cur.execute("SELECT COUNT(*) FROM richieste WHERE ordine_completato = 1")
+    tot_ordini = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM richieste WHERE ordine_completato = 1 AND ricevuta_il LIKE ?", ("%" + mese_corrente,))
+    ordini_mese = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM richieste")
+    tot_richieste = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM clienti")
+    tot_clienti = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM richieste WHERE presa_da IS NULL")
+    in_attesa = cur.fetchone()[0]
+    con.close()
+    fatturato_totale = tot_ordini * PREZZO_UNITARIO
+    fatturato_mese = ordini_mese * PREZZO_UNITARIO
+    mese_nome = datetime.now().strftime("%B %Y")
+    testo_stats = (
+        "Statistiche Popperinho Shop\n\n"
+        "Clienti registrati: " + str(tot_clienti) + "\n"
+        "Richieste totali: " + str(tot_richieste) + "\n"
+        "In attesa di risposta: " + str(in_attesa) + "\n\n"
+        "Ordini completati totali: " + str(tot_ordini) + "\n"
+        "Fatturato totale: " + str(fatturato_totale) + " euro\n\n"
+        "Ordini questo mese (" + mese_nome + "): " + str(ordini_mese) + "\n"
+        "Fatturato questo mese: " + str(fatturato_mese) + " euro"
+    )
+    await update.message.reply_text(testo_stats)
+
+async def cmd_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in OPERATORI:
+        return
+    args = context.args
+    if not args:
+        lista = get_blacklist()
+        if not lista:
+            await update.message.reply_text("Blacklist vuota.")
+            return
+        righe = []
+        for chat_id, nome, aggiunto_il in lista:
+            righe.append(str(chat_id) + " - " + (nome or "?") + " (aggiunto il " + aggiunto_il + ")")
+        await update.message.reply_text("Blacklist:\n\n" + "\n".join(righe))
+        return
+    if args[0].lower() == "aggiungi" and len(args) >= 2:
+        try:
+            chat_id = int(args[1])
+            nome = " ".join(args[2:]) if len(args) > 2 else "Sconosciuto"
+            aggiungi_blacklist(chat_id, nome)
+            await update.message.reply_text("Utente " + str(chat_id) + " aggiunto alla blacklist.")
+        except ValueError:
+            await update.message.reply_text("ID non valido. Usa: /blacklist aggiungi 123456789 Nome")
+    elif args[0].lower() == "rimuovi" and len(args) >= 2:
+        try:
+            chat_id = int(args[1])
+            rimuovi_blacklist(chat_id)
+            await update.message.reply_text("Utente " + str(chat_id) + " rimosso dalla blacklist.")
+        except ValueError:
+            await update.message.reply_text("ID non valido. Usa: /blacklist rimuovi 123456789")
+    else:
+        await update.message.reply_text("Comandi:\n/blacklist - mostra la lista\n/blacklist aggiungi 123456789 Nome\n/blacklist rimuovi 123456789")
 
 async def cmd_aiuto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in OPERATORI:
         return
     await update.message.reply_text(
-        "📖 *Comandi disponibili:*\n\n"
-        "/storico — ultime 20 richieste\n"
-        "/storico aperte — solo quelle in attesa\n"
-        "/clienti — tutti i clienti con richieste e ordini\n"
-        "/top — classifica clienti per ordini\n"
-        "/inattivi — chi non scrive da 28+ giorni\n"
-        "/setvideo — imposta il video di benvenuto (allega il video al comando)\n"
-        "/aiuto — mostra questo messaggio",
-        parse_mode="Markdown"
+        "Comandi disponibili:\n\n"
+        "/storico - ultime 20 richieste\n"
+        "/storico aperte - solo quelle in attesa\n"
+        "/clienti - tutti i clienti con richieste e ordini\n"
+        "/top - classifica clienti per ordini\n"
+        "/inattivi - chi non scrive da 28+ giorni\n"
+        "/broadcast <testo> - manda un messaggio a tutti i clienti\n"
+        "/setvideo - imposta il video di benvenuto (allega il video al comando)\n"
+        "/aiuto - mostra questo messaggio"
     )
 
 
@@ -635,19 +731,20 @@ def main():
     app.add_handler(CommandHandler("clienti", cmd_clienti))
     app.add_handler(CommandHandler("top", cmd_top))
     app.add_handler(CommandHandler("inattivi", cmd_inattivi))
+    app.add_handler(CommandHandler("broadcast", cmd_broadcast))
+    app.add_handler(CommandHandler("stats", cmd_stats))
+    app.add_handler(CommandHandler("blacklist", cmd_blacklist))
     app.add_handler(CommandHandler("aiuto", cmd_aiuto))
     app.add_handler(CallbackQueryHandler(gestisci_callback))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, cmd_setvideo))
     app.add_handler(CommandHandler("setvideo", cmd_setvideo))
-    app.add_handler(CommandHandler("broadcast", cmd_broadcast))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ricevi_messaggio))
-    # Promemoria automatico ogni 28 giorni alle 21:00
     app.job_queue.run_repeating(
         invia_promemoria_inattivi,
         interval=28 * 24 * 3600,
         first=datetime.strptime("21:00", "%H:%M").time()
     )
-    print(f"✅ Bot avviato — {NOME_NEGOZIO}")
+    print("Bot avviato - " + NOME_NEGOZIO)
     app.run_polling()
 
 if __name__ == "__main__":
