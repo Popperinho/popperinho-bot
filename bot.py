@@ -336,12 +336,12 @@ def build_tastiera(req):
 def tastiera_quantita():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("1️⃣  →  " + str(PREZZO_UNITARIO) + "euro", callback_data="qty:1"),
-            InlineKeyboardButton("2️⃣  →  " + str(PREZZO_UNITARIO * 2) + "euro", callback_data="qty:2"),
+            InlineKeyboardButton("1️⃣  →  " + str(PREZZO_UNITARIO) + "€", callback_data="qty:1"),
+            InlineKeyboardButton("2️⃣  →  " + str(PREZZO_UNITARIO * 2) + "€", callback_data="qty:2"),
         ],
         [
-            InlineKeyboardButton("3️⃣  →  " + str(PREZZO_UNITARIO * 3) + "euro", callback_data="qty:3"),
-            InlineKeyboardButton("4️⃣  →  " + str(PREZZO_UNITARIO * 4) + "euro", callback_data="qty:4"),
+            InlineKeyboardButton("3️⃣  →  " + str(PREZZO_UNITARIO * 3) + "€", callback_data="qty:3"),
+            InlineKeyboardButton("4️⃣  →  " + str(PREZZO_UNITARIO * 4) + "€", callback_data="qty:4"),
         ],
         [InlineKeyboardButton("✏️ Altre quantita o domande", callback_data="qty:altro")],
     ])
@@ -359,7 +359,7 @@ async def invia_promemoria_inattivi(context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=("Ciao " + (nome or "amico") + ", dobbiamo parlare.\n\n"
-                      "Ultimamente ci sentiamo poco... forse e arrivato il momento "
+                      "Ultimamente ci sentiamo poco... forse è arrivato il momento "
                       "di spopperare e calarsi " + str(medie) + " medie 🍺"),
                 reply_markup=pulsante
             )
@@ -380,9 +380,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logging.warning("Errore video benvenuto: " + str(e))
     await update.message.reply_text(
-        "Ciao " + nome + "! Benvenuto dal King del Popper\n\n"
-        "Scrivi la tua richiesta d'ordine e verrai contattato in privato il prima possibile!\n\n"
-        "Seleziona la quantita 👇",
+        "Ciao " + nome + "! Benvenuto dal King del Popper 👑\n\n"
+        "Scrivi la tua richiesta d’ordine e verrai contattato in privato il prima possibile!\n\n"
+        "Seleziona la quantità 👇",
         reply_markup=tastiera_quantita()
     )
 
@@ -395,7 +395,7 @@ async def cmd_setvideo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Manda il video e scrivi /setvideo nella didascalia.")
         return
     set_impostazione("video_benvenuto", video.file_id)
-    await update.message.reply_text("Video di benvenuto impostato!")
+    await update.message.reply_text("Video di benvenuto impostato! ✅")
 
 
 async def ricevi_messaggio(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -443,7 +443,7 @@ async def gestisci_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         valore = query.data.split(":")[1]
 
         if valore == "nuovo":
-            await query.edit_message_text("Seleziona la quantita per il nuovo ordine:", reply_markup=tastiera_quantita())
+            await query.edit_message_text("Seleziona la quantità per il nuovo ordine:", reply_markup=tastiera_quantita())
             return
 
         if valore == "altro":
@@ -452,7 +452,7 @@ async def gestisci_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         quantita = int(valore)
         totale = quantita * PREZZO_UNITARIO
-        testo_richiesta = "Ordine: " + str(quantita) + " Popperinho - Totale: " + str(totale) + " euro"
+        testo_richiesta = "Ordine: " + str(quantita) + " Popperinho - Totale: " + str(totale) + " €"
 
         registra_cliente(chat_id_cliente, nome_cliente, username)
         richiesta_id = salva_richiesta(chat_id_cliente, nome_cliente, username, testo_richiesta)
@@ -471,11 +471,11 @@ async def gestisci_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         pulsante_nuovo = InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Piazza nuovo ordine", callback_data="qty:nuovo")]])
         await query.edit_message_text(
-            "Grazie! La tua richiesta e stata presa in carico.\n\n"
-            "Quantita: " + str(quantita) + " Popperinho\n"
+            "Grazie! La tua richiesta è stata presa in carico.\n\n"
+            "Quantità: " + str(quantita) + " Popperinho\n"
             "Totale: " + str(totale) + " euro\n\n"
-            "Verrai contattato in privato al piu presto!\n\n"
-            "Il pulsante qui sotto ti servira la prossima volta che vuoi fare un nuovo ordine - il tuo ordine attuale e gia partito!",
+            "Verrai contattato in privato al più presto!\n\n"
+            "Il pulsante qui sotto ti serverà la prossima volta che vuoi fare un nuovo ordine — il tuo ordine attuale è già partito!",
             reply_markup=pulsante_nuovo
         )
         return
@@ -601,7 +601,7 @@ async def cmd_top(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for i, (nome, username, chat_id, primo, ultimo, tot_r, tot_o) in enumerate(top):
         m = medaglie[i] if i < 3 else str(i + 1) + "."
         righe.append(m + " " + (nome or "?") + " - " + str(tot_o) + " ordini | " + str(tot_r) + " richieste")
-    await update.message.reply_text("Top clienti per ordini:\n\n" + "\n".join(righe))
+    await update.message.reply_text("Top clienti per ordini: 🏆\n\n" + "\n".join(righe))
 
 
 async def cmd_inattivi(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -609,7 +609,7 @@ async def cmd_inattivi(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     inattivi = get_inattivi(28)
     if not inattivi:
-        await update.message.reply_text("Nessun cliente inattivo da piu di 28 giorni.")
+        await update.message.reply_text("Nessun cliente inattivo da più di 28 giorni.")
         return
     righe = []
     for chat_id, nome, username, ultimo, giorni in inattivi[:15]:
@@ -618,7 +618,7 @@ async def cmd_inattivi(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Inattivo da " + str(giorni) + " giorni (ultimo: " + (ultimo or "?") + ")\n"
             "tg://user?id=" + str(chat_id)
         )
-    await update.message.reply_text("Clienti inattivi da 28+ giorni:\n\n" + "\n\n".join(righe))
+    await update.message.reply_text("Clienti inattivi da 28+ giorni: 😴\n\n" + "\n\n".join(righe))
 
 
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -640,14 +640,14 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     con.close()
     mese_nome = datetime.now().strftime("%B %Y")
     await update.message.reply_text(
-        "Statistiche Popperinho Shop\n\n"
-        "Clienti registrati: " + str(tot_clienti) + "\n"
-        "Richieste totali: " + str(tot_richieste) + "\n"
-        "In attesa di risposta: " + str(in_attesa) + "\n\n"
-        "Ordini completati totali: " + str(tot_ordini) + "\n"
-        "Fatturato totale: " + str(tot_ordini * PREZZO_UNITARIO) + " euro\n\n"
-        "Ordini questo mese (" + mese_nome + "): " + str(ordini_mese) + "\n"
-        "Fatturato questo mese: " + str(ordini_mese * PREZZO_UNITARIO) + " euro"
+        "Statistiche Popperinho Shop 📊\n\n"
+        "Clienti registrati: 👥 " + str(tot_clienti) + "\n"
+        "Richieste totali: 📩 " + str(tot_richieste) + "\n"
+        "In attesa di risposta: ⏳ " + str(in_attesa) + "\n\n"
+        "Ordini completati totali: 📦 " + str(tot_ordini) + "\n"
+        "Fatturato totale: 💰 " + str(tot_ordini * PREZZO_UNITARIO) + " euro\n\n"
+        "Ordini questo mese 📅 (" + mese_nome + "): " + str(ordini_mese) + "\n"
+        "Fatturato questo mese: 💰 " + str(ordini_mese * PREZZO_UNITARIO) + " €"
     )
 
 
@@ -702,7 +702,7 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logging.warning("Broadcast fallito per " + str(chat_id) + ": " + str(e))
             falliti += 1
     await update.message.reply_text(
-        "Broadcast completato!\n\nInviati: " + str(inviati) + "\nFalliti: " + str(falliti)
+        "Broadcast completato! 📢\n\n✅ Inviati: " + str(inviati) + "\n❌ Falliti: " + str(falliti)
     )
 
 
@@ -725,14 +725,14 @@ async def cmd_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_id = int(args[1])
             nome = " ".join(args[2:]) if len(args) > 2 else "Sconosciuto"
             aggiungi_blacklist(chat_id, nome)
-            await update.message.reply_text("Utente " + str(chat_id) + " aggiunto alla blacklist.")
+            await update.message.reply_text("Utente " + str(chat_id) + " aggiunto alla blacklist. ✅")
         except ValueError:
             await update.message.reply_text("ID non valido. Usa: /blacklist aggiungi 123456789 Nome")
     elif args[0].lower() == "rimuovi" and len(args) >= 2:
         try:
             chat_id = int(args[1])
             rimuovi_blacklist(chat_id)
-            await update.message.reply_text("Utente " + str(chat_id) + " rimosso dalla blacklist.")
+            await update.message.reply_text("Utente " + str(chat_id) + " rimosso dalla blacklist. ✅")
         except ValueError:
             await update.message.reply_text("ID non valido. Usa: /blacklist rimuovi 123456789")
     else:
@@ -771,7 +771,7 @@ async def gestisci_nuke_callback(update: Update, context: ContextTypes.DEFAULT_T
         nuke_stato[chat_id] = 2
         pulsante = InlineKeyboardMarkup([[InlineKeyboardButton("CONFERMA 2/3", callback_data="nuke:2")]])
         await query.edit_message_text(
-            "Sei DAVVERO sicuro?\n\nNon ci sara modo di recuperare nulla.\nClienti persi per sempre.",
+            "Sei DAVVERO sicuro?\n\nNon ci sarà modo di recuperare nulla.\nClienti persi per sempre.",
             reply_markup=pulsante
         )
 
@@ -779,7 +779,7 @@ async def gestisci_nuke_callback(update: Update, context: ContextTypes.DEFAULT_T
         nuke_stato[chat_id] = 3
         pulsante = InlineKeyboardMarkup([[InlineKeyboardButton("CONFERMA 3/3 - ULTIMA CHANCE", callback_data="nuke:3")]])
         await query.edit_message_text(
-            "ULTIMA CHANCE.\n\nDopo questo passaggio inserisci la parola d'ordine.\nVuoi davvero procedere?",
+            "ULTIMA CHANCE.\n\nDopo questo passaggio inserisci la parola d’ordine.\nVuoi davvero procedere?",
             reply_markup=pulsante
         )
 
@@ -798,7 +798,7 @@ async def gestisci_parola_nuke(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     testo = update.message.text.strip()
     if testo != "NAGASAKI":
-        await update.message.reply_text("Parola d'ordine errata. Operazione annullata.")
+        await update.message.reply_text("Parola d’ordine errata. Operazione annullata.")
         nuke_stato.pop(chat_id, None)
         return
 
@@ -815,7 +815,7 @@ async def gestisci_parola_nuke(update: Update, context: ContextTypes.DEFAULT_TYP
     con.close()
 
     await update.message.reply_text(
-        "NAGASAKI eseguito.\n\nTutti i dati sono stati cancellati.\nBenvenuto nel miglior shop di calzini online! :)"
+        "NAGASAKI eseguito.\n\nTutti i dati sono stati cancellati.\nBenvenuto nel miglior shop di calzini online! 🧦"
     )
 
 
