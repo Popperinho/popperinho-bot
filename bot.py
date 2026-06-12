@@ -9,16 +9,15 @@ from telegram.ext import (
 )
 
 TOKEN = "8345193135:AAGYYoN60Nmri3-SwOlvi_vauYEJHkFK7nw"
-
-OPERATORI = {
-    461088008: "Attila",
-}
-
+OPERATORI = {461088008: "Attila"}
 NOME_NEGOZIO = "Popperinho Shop"
 DB_PATH = "richieste.db"
 PREZZO_UNITARIO = 20
 
 logging.basicConfig(level=logging.INFO)
+
+# Stato nuke: tiene traccia di chi sta eseguendo la procedura
+nuke_stato = {}  # { chat_id: step (1,2,3,4) }
 
 
 # ── DATABASE ──────────────────────────────────────────────────────────────────
@@ -28,26 +27,25 @@ def init_db():
     cur = con.cursor()
     cur.execute("""
         CREATE TABLE IF NOT EXISTS richieste (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            chat_id_cliente INTEGER NOT NULL,
-            nome_cliente    TEXT,
-            username        TEXT,
-            testo           TEXT NOT NULL,
-            ricevuta_il     TEXT NOT NULL,
-            presa_da        TEXT,
-            presa_il        TEXT,
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id_cliente   INTEGER NOT NULL,
+            nome_cliente      TEXT,
+            username          TEXT,
+            testo             TEXT NOT NULL,
+            ricevuta_il       TEXT NOT NULL,
+            presa_da          TEXT,
+            presa_il          TEXT,
             ordine_completato INTEGER DEFAULT 0,
-            completato_il   TEXT,
-            completato_da   TEXT
+            completato_il     TEXT,
+            completato_da     TEXT
         )
     """)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS messaggi_operatori (
-            richiesta_id  INTEGER NOT NULL,
-            op_chat_id    INTEGER NOT NULL,
-            msg_id        INTEGER NOT NULL,
-            PRIMARY KEY (richiesta_id, op_chat_id),
-            FOREIGN KEY (richiesta_id) REFERENCES richieste(id)
+            richiesta_id INTEGER NOT NULL,
+            op_chat_id   INTEGER NOT NULL,
+            msg_id       INTEGER NOT NULL,
+            PRIMARY KEY (richiesta_id, op_chat_id)
         )
     """)
     cur.execute("""
@@ -67,8 +65,8 @@ def init_db():
     """)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS blacklist (
-            chat_id INTEGER PRIMARY KEY,
-            nome    TEXT,
+            chat_id     INTEGER PRIMARY KEY,
+            nome        TEXT,
             aggiunto_il TEXT
         )
     """)
@@ -79,10 +77,11 @@ def init_db():
     ]:
         try:
             cur.execute("ALTER TABLE richieste ADD COLUMN " + col + " " + tipo)
-        except:
+        except Exception:
             pass
     con.commit()
     con.close()
+
 
 def get_impostazione(chiave):
     con = sqlite3.connect(DB_PATH)
@@ -92,12 +91,14 @@ def get_impostazione(chiave):
     con.close()
     return row[0] if row else None
 
+
 def set_impostazione(chiave, valore):
     con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
     cur.execute("INSERT OR REPLACE INTO impostazioni (chiave, valore) VALUES (?, ?)", (chiave, valore))
     con.commit()
     con.close()
+
 
 def is_blacklisted(chat_id):
     con = sqlite3.connect(DB_PATH)
@@ -107,13 +108,17 @@ def is_blacklisted(chat_id):
     con.close()
     return row is not None
 
+
 def aggiungi_blacklist(chat_id, nome):
     con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
-    cur.execute("INSERT OR REPLACE INTO blacklist (chat_id, nome, aggiunto_il) VALUES (?, ?, ?)",
-                (chat_id, nome, datetime.now().strftime("%d/%m/%Y %H:%M")))
+    cur.execute(
+        "INSERT OR REPLACE INTO blacklist (chat_id, nome, aggiunto_il) VALUES (?, ?, ?)",
+        (chat_id, nome, datetime.now().strftime("%d/%m/%Y %H:%M"))
+    )
     con.commit()
     con.close()
+
 
 def rimuovi_blacklist(chat_id):
     con = sqlite3.connect(DB_PATH)
@@ -122,6 +127,7 @@ def rimuovi_blacklist(chat_id):
     con.commit()
     con.close()
 
+
 def get_blacklist():
     con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
@@ -129,6 +135,7 @@ def get_blacklist():
     rows = cur.fetchall()
     con.close()
     return rows
+
 
 def registra_cliente(chat_id, nome, username):
     con = sqlite3.connect(DB_PATH)
@@ -145,6 +152,7 @@ def registra_cliente(chat_id, nome, username):
     con.commit()
     con.close()
 
+
 def salva_richiesta(chat_id_cliente, nome_cliente, username, testo):
     con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
@@ -157,6 +165,7 @@ def salva_richiesta(chat_id_cliente, nome_cliente, username, testo):
     con.close()
     return richiesta_id
 
+
 def salva_msg_operatore(richiesta_id, op_chat_id, msg_id):
     con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
@@ -167,6 +176,7 @@ def salva_msg_operatore(richiesta_id, op_chat_id, msg_id):
     con.commit()
     con.close()
 
+
 def prendi_in_carico(richiesta_id, nome_operatore):
     con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
@@ -175,12 +185,14 @@ def prendi_in_carico(richiesta_id, nome_operatore):
     if not row or row[0] is not None:
         con.close()
         return False, row[0] if row else "?"
-    cur.execute("""
-        UPDATE richieste SET presa_da = ?, presa_il = ? WHERE id = ?
-    """, (nome_operatore, datetime.now().strftime("%d/%m/%Y %H:%M"), richiesta_id))
+    cur.execute(
+        "UPDATE richieste SET presa_da = ?, presa_il = ? WHERE id = ?",
+        (nome_operatore, datetime.now().strftime("%d/%m/%Y %H:%M"), richiesta_id)
+    )
     con.commit()
     con.close()
     return True, nome_operatore
+
 
 def completa_ordine(richiesta_id, nome_operatore):
     con = sqlite3.connect(DB_PATH)
@@ -190,12 +202,14 @@ def completa_ordine(richiesta_id, nome_operatore):
     if not row or row[0] == 1:
         con.close()
         return False
-    cur.execute("""
-        UPDATE richieste SET ordine_completato = 1, completato_il = ?, completato_da = ? WHERE id = ?
-    """, (datetime.now().strftime("%d/%m/%Y %H:%M"), nome_operatore, richiesta_id))
+    cur.execute(
+        "UPDATE richieste SET ordine_completato = 1, completato_il = ?, completato_da = ? WHERE id = ?",
+        (datetime.now().strftime("%d/%m/%Y %H:%M"), nome_operatore, richiesta_id)
+    )
     con.commit()
     con.close()
     return True
+
 
 def get_messaggi_operatori(richiesta_id):
     con = sqlite3.connect(DB_PATH)
@@ -205,6 +219,7 @@ def get_messaggi_operatori(richiesta_id):
     con.close()
     return rows
 
+
 def get_richiesta(richiesta_id):
     con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
@@ -213,14 +228,14 @@ def get_richiesta(richiesta_id):
     con.close()
     return row
 
+
 def get_storico(limit=20, solo_aperte=False):
     con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
     if solo_aperte:
         cur.execute("""
             SELECT id, nome_cliente, username, testo, ricevuta_il, presa_da, ordine_completato
-            FROM richieste WHERE presa_da IS NULL
-            ORDER BY id DESC LIMIT ?
+            FROM richieste WHERE presa_da IS NULL ORDER BY id DESC LIMIT ?
         """, (limit,))
     else:
         cur.execute("""
@@ -230,6 +245,7 @@ def get_storico(limit=20, solo_aperte=False):
     rows = cur.fetchall()
     con.close()
     return rows
+
 
 def get_stats_clienti():
     con = sqlite3.connect(DB_PATH)
@@ -247,6 +263,7 @@ def get_stats_clienti():
     con.close()
     return rows
 
+
 def get_inattivi(giorni=28):
     con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
@@ -261,10 +278,11 @@ def get_inattivi(giorni=28):
             diff = (ora - dt).days
             if diff >= giorni:
                 inattivi.append((chat_id, nome, username, ultimo, diff))
-        except:
+        except Exception:
             pass
     inattivi.sort(key=lambda x: x[4], reverse=True)
     return inattivi
+
 
 def conta_clienti_totali():
     con = sqlite3.connect(DB_PATH)
@@ -273,6 +291,7 @@ def conta_clienti_totali():
     n = cur.fetchone()[0]
     con.close()
     return n
+
 
 def conta_ordini_totali():
     con = sqlite3.connect(DB_PATH)
@@ -283,24 +302,26 @@ def conta_ordini_totali():
     return n
 
 
-# ── TASTIERE ──────────────────────────────────────────────────────────────────
+# ── HELPER UI ─────────────────────────────────────────────────────────────────
 
 def build_testo(req):
     rid, chat_id_cliente, nome_cliente, username, testo, ricevuta_il, presa_da, presa_il, ordine_completato, completato_il, completato_da = req
     if presa_da is None:
         stato = "Stato: In attesa"
     elif ordine_completato:
-        stato = "Presa da: " + presa_da + " alle " + presa_il + "\nOrdine completato da: " + completato_da + " alle " + completato_il
+        stato = ("Presa da: " + presa_da + " alle " + presa_il + "\n"
+                 "Completato da: " + (completato_da or "?") + " alle " + (completato_il or "?"))
     else:
         stato = "Presa da: " + presa_da + " alle " + presa_il + "\nIn lavorazione"
     return (
         "Richiesta #" + str(rid) + "\n\n"
-        + "Cliente: " + nome_cliente + "  |  " + username + "\n"
-        + "Ora: " + ricevuta_il + "\n\n"
-        + "Messaggio: " + testo + "\n\n"
-        + "Apri chat: tg://user?id=" + str(chat_id_cliente) + "\n\n"
+        "Cliente: " + (nome_cliente or "?") + "  |  " + (username or "?") + "\n"
+        "Ora: " + ricevuta_il + "\n\n"
+        "Messaggio: " + testo + "\n\n"
+        "Chat: tg://user?id=" + str(chat_id_cliente) + "\n\n"
         + stato
     )
+
 
 def build_tastiera(req):
     rid, _, _, _, _, _, presa_da, _, ordine_completato, _, _ = req
@@ -311,19 +332,18 @@ def build_tastiera(req):
         tasti.append(InlineKeyboardButton("Ordine completato", callback_data="completato:" + str(rid)))
     return InlineKeyboardMarkup([tasti]) if tasti else None
 
+
 def tastiera_quantita():
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("1  ->  " + str(PREZZO_UNITARIO) + "euro", callback_data="qty:1"),
-            InlineKeyboardButton("2  ->  " + str(PREZZO_UNITARIO*2) + "euro", callback_data="qty:2"),
+            InlineKeyboardButton("2  ->  " + str(PREZZO_UNITARIO * 2) + "euro", callback_data="qty:2"),
         ],
         [
-            InlineKeyboardButton("3  ->  " + str(PREZZO_UNITARIO*3) + "euro", callback_data="qty:3"),
-            InlineKeyboardButton("4  ->  " + str(PREZZO_UNITARIO*4) + "euro", callback_data="qty:4"),
+            InlineKeyboardButton("3  ->  " + str(PREZZO_UNITARIO * 3) + "euro", callback_data="qty:3"),
+            InlineKeyboardButton("4  ->  " + str(PREZZO_UNITARIO * 4) + "euro", callback_data="qty:4"),
         ],
-        [
-            InlineKeyboardButton("Altre quantita o domande", callback_data="qty:altro"),
-        ],
+        [InlineKeyboardButton("Altre quantita o domande", callback_data="qty:altro")],
     ])
 
 
@@ -334,19 +354,19 @@ async def invia_promemoria_inattivi(context: ContextTypes.DEFAULT_TYPE):
     inviati = 0
     for chat_id, nome, username, ultimo, giorni in inattivi:
         medie = random.randint(5, 20)
-        pulsante = InlineKeyboardMarkup([[
-            InlineKeyboardButton("Ordina ora", callback_data="qty:nuovo")
-        ]])
+        pulsante = InlineKeyboardMarkup([[InlineKeyboardButton("Ordina ora", callback_data="qty:nuovo")]])
         try:
             await context.bot.send_message(
                 chat_id=chat_id,
-                text="Ciao " + nome + ", dobbiamo parlare.\n\nUltimamente ci sentiamo poco... forse e arrivato il momento di spopperare e calarsi " + str(medie) + " medie",
+                text=("Ciao " + (nome or "amico") + ", dobbiamo parlare.\n\n"
+                      "Ultimamente ci sentiamo poco... forse e arrivato il momento "
+                      "di spopperare e calarsi " + str(medie) + " medie"),
                 reply_markup=pulsante
             )
             inviati += 1
         except Exception as e:
-            logging.warning("Impossibile inviare promemoria a " + str(chat_id) + ": " + str(e))
-    logging.info("Promemoria inattivi: inviati " + str(inviati) + " messaggi.")
+            logging.warning("Promemoria fallito per " + str(chat_id) + ": " + str(e))
+    logging.info("Promemoria inviati: " + str(inviati))
 
 
 # ── HANDLERS ──────────────────────────────────────────────────────────────────
@@ -358,21 +378,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await update.message.reply_video(video=video_id)
         except Exception as e:
-            logging.warning("Errore invio video benvenuto: " + str(e))
+            logging.warning("Errore video benvenuto: " + str(e))
     await update.message.reply_text(
-        "Ciao " + nome + "! Benvenuto dal King del Popper\n\nScrivi la tua richiesta d'ordine e verrai contattato in privato il prima possibile!\n\nSeleziona la quantita:",
+        "Ciao " + nome + "! Benvenuto dal King del Popper\n\n"
+        "Scrivi la tua richiesta d'ordine e verrai contattato in privato il prima possibile!\n\n"
+        "Seleziona la quantita:",
         reply_markup=tastiera_quantita()
     )
+
 
 async def cmd_setvideo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in OPERATORI:
         return
     video = update.message.video or update.message.document
     if not video:
-        await update.message.reply_text("Manda il video e scrivi /setvideo nella didascalia per impostarlo come video di benvenuto.")
+        await update.message.reply_text("Manda il video e scrivi /setvideo nella didascalia.")
         return
     set_impostazione("video_benvenuto", video.file_id)
-    await update.message.reply_text("Video di benvenuto impostato! Ogni nuovo cliente lo ricevera all'avvio.")
+    await update.message.reply_text("Video di benvenuto impostato!")
+
 
 async def ricevi_messaggio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id in OPERATORI:
@@ -383,42 +407,38 @@ async def ricevi_messaggio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cliente = update.effective_user
     chat_id_cliente = update.effective_chat.id
     testo = update.message.text
-
-    nome_cliente = (cliente.first_name or "") + (" " + cliente.last_name if cliente.last_name else "")
+    nome_cliente = ((cliente.first_name or "") + (" " + cliente.last_name if cliente.last_name else "")).strip()
     username = "@" + cliente.username if cliente.username else "(senza username)"
-    nome_cliente = nome_cliente.strip()
 
     registra_cliente(chat_id_cliente, nome_cliente, username)
     richiesta_id = salva_richiesta(chat_id_cliente, nome_cliente, username, testo)
-
     req = get_richiesta(richiesta_id)
-    testo_op = build_testo(req)
-    tastiera = build_tastiera(req)
 
     for op_chat_id in OPERATORI:
         try:
             msg = await context.bot.send_message(
                 chat_id=op_chat_id,
-                text=testo_op,
-                reply_markup=tastiera
+                text=build_testo(req),
+                reply_markup=build_tastiera(req)
             )
             salva_msg_operatore(richiesta_id, op_chat_id, msg.message_id)
         except Exception as e:
-            logging.warning("Errore invio a operatore " + str(op_chat_id) + ": " + str(e))
+            logging.warning("Errore invio operatore: " + str(e))
 
     await update.message.reply_text("Messaggio ricevuto! Ti risponderemo il prima possibile.")
+
 
 async def gestisci_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
+    # ── Quantita cliente ──
     if query.data.startswith("qty:"):
         if is_blacklisted(query.from_user.id):
             return
         cliente = query.from_user
         chat_id_cliente = query.message.chat_id
-        nome_cliente = (cliente.first_name or "") + (" " + cliente.last_name if cliente.last_name else "")
-        nome_cliente = nome_cliente.strip()
+        nome_cliente = ((cliente.first_name or "") + (" " + cliente.last_name if cliente.last_name else "")).strip()
         username = "@" + cliente.username if cliente.username else "(senza username)"
         valore = query.data.split(":")[1]
 
@@ -436,25 +456,20 @@ async def gestisci_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         registra_cliente(chat_id_cliente, nome_cliente, username)
         richiesta_id = salva_richiesta(chat_id_cliente, nome_cliente, username, testo_richiesta)
-
         req = get_richiesta(richiesta_id)
-        testo_op = build_testo(req)
-        tastiera_op = build_tastiera(req)
 
         for op_chat_id in OPERATORI:
             try:
                 msg = await context.bot.send_message(
                     chat_id=op_chat_id,
-                    text=testo_op,
-                    reply_markup=tastiera_op
+                    text=build_testo(req),
+                    reply_markup=build_tastiera(req)
                 )
                 salva_msg_operatore(richiesta_id, op_chat_id, msg.message_id)
             except Exception as e:
-                logging.warning("Errore invio a operatore " + str(op_chat_id) + ": " + str(e))
+                logging.warning("Errore invio operatore: " + str(e))
 
-        pulsante_nuovo = InlineKeyboardMarkup([[
-            InlineKeyboardButton("Piazza nuovo ordine", callback_data="qty:nuovo")
-        ]])
+        pulsante_nuovo = InlineKeyboardMarkup([[InlineKeyboardButton("Piazza nuovo ordine", callback_data="qty:nuovo")]])
         await query.edit_message_text(
             "Grazie! La tua richiesta e stata presa in carico.\n\n"
             "Quantita: " + str(quantita) + " Popperinho\n"
@@ -465,6 +480,7 @@ async def gestisci_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # ── Pulsanti operatori ──
     operatore_id = query.from_user.id
     nome_operatore = OPERATORI.get(operatore_id, query.from_user.first_name)
 
@@ -472,27 +488,28 @@ async def gestisci_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         richiesta_id = int(query.data.split(":")[1])
         ok, chi = prendi_in_carico(richiesta_id, nome_operatore)
         if not ok:
-            await query.answer("Gia presa in carico da " + chi, show_alert=True)
+            await query.answer("Gia presa in carico da " + str(chi), show_alert=True)
             return
 
     elif query.data.startswith("completato:"):
         richiesta_id = int(query.data.split(":")[1])
         ok = completa_ordine(richiesta_id, nome_operatore)
         if not ok:
-            await query.answer("Ordine gia segnato come completato", show_alert=True)
+            await query.answer("Ordine gia completato", show_alert=True)
             return
         req_temp = get_richiesta(richiesta_id)
         if req_temp:
             chat_id_cliente = req_temp[1]
-            bot_info = await context.bot.get_me()
-            link_bot = "https://t.me/" + bot_info.username
             try:
+                bot_info = await context.bot.get_me()
+                link_bot = "https://t.me/" + bot_info.username
                 await context.bot.send_message(
                     chat_id=chat_id_cliente,
-                    text="Chi non spoppera in compagnia e un ladro o una spia, manda il link a un amico!\n\n" + link_bot
+                    text=("Chi non spoppera in compagnia e un ladro o una spia, "
+                          "manda il link a un amico!\n\n" + link_bot)
                 )
             except Exception as e:
-                logging.warning("Errore invio messaggio referral: " + str(e))
+                logging.warning("Errore messaggio referral: " + str(e))
     else:
         return
 
@@ -500,19 +517,17 @@ async def gestisci_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not req:
         return
 
-    testo_aggiornato = build_testo(req)
-    tastiera = build_tastiera(req)
-
     for op_chat_id, msg_id in get_messaggi_operatori(richiesta_id):
         try:
             await context.bot.edit_message_text(
                 chat_id=op_chat_id,
                 message_id=msg_id,
-                text=testo_aggiornato,
-                reply_markup=tastiera
+                text=build_testo(req),
+                reply_markup=build_tastiera(req)
             )
         except Exception as e:
-            logging.warning("Errore aggiornamento " + str(op_chat_id) + ": " + str(e))
+            logging.warning("Errore aggiornamento: " + str(e))
+
 
 async def cmd_storico(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in OPERATORI:
@@ -538,28 +553,27 @@ async def cmd_storico(update: Update, context: ContextTypes.DEFAULT_TYPE):
         anteprima = testo[:50] + ("..." if len(testo) > 50 else "")
         righe.append("#" + str(rid) + " - " + (nome or "?") + " | " + stato + "\n" + ricevuta_il + " - " + anteprima)
 
-    # Manda a pezzi se troppo lungo
-    testo_completo = titolo
+    testo_out = titolo
     blocco = ""
     for riga in righe:
-        if len(testo_completo) + len(blocco) + len(riga) > 3800:
-            await update.message.reply_text(testo_completo + blocco)
-            testo_completo = ""
+        if len(testo_out) + len(blocco) + len(riga) > 3800:
+            await update.message.reply_text(testo_out + blocco)
+            testo_out = ""
             blocco = ""
         blocco += riga + "\n\n"
-    await update.message.reply_text(testo_completo + blocco)
+    if testo_out + blocco:
+        await update.message.reply_text(testo_out + blocco)
+
 
 async def cmd_clienti(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in OPERATORI:
         return
     stats = get_stats_clienti()
-    tot_clienti = conta_clienti_totali()
-    tot_ordini = conta_ordini_totali()
-
     if not stats:
         await update.message.reply_text("Nessun cliente ancora.")
         return
-
+    tot_clienti = conta_clienti_totali()
+    tot_ordini = conta_ordini_totali()
     righe = []
     for i, (nome, username, chat_id, primo, ultimo, tot_r, tot_o) in enumerate(stats[:15], 1):
         righe.append(
@@ -567,37 +581,36 @@ async def cmd_clienti(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "   Richieste: " + str(tot_r) + "  |  Ordini: " + str(tot_o or 0) + "\n"
             "   Ultimo contatto: " + (ultimo or "?")
         )
+    await update.message.reply_text(
+        "Clienti totali: " + str(tot_clienti) + "\n"
+        "Ordini completati: " + str(tot_ordini) + "\n\n"
+        + "\n\n".join(righe)
+    )
 
-    testo = "Clienti totali: " + str(tot_clienti) + "\nOrdini completati: " + str(tot_ordini) + "\n\n" + "\n\n".join(righe)
-    await update.message.reply_text(testo)
 
 async def cmd_top(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in OPERATORI:
         return
     stats = get_stats_clienti()
     top = [s for s in stats if (s[6] or 0) > 0][:10]
-
     if not top:
         await update.message.reply_text("Nessun ordine completato ancora.")
         return
-
-    righe = []
     medaglie = ["1.", "2.", "3."]
+    righe = []
     for i, (nome, username, chat_id, primo, ultimo, tot_r, tot_o) in enumerate(top):
-        medaglia = medaglie[i] if i < 3 else str(i+1) + "."
-        righe.append(medaglia + " " + (nome or "?") + " - " + str(tot_o) + " ordini | " + str(tot_r) + " richieste")
-
+        m = medaglie[i] if i < 3 else str(i + 1) + "."
+        righe.append(m + " " + (nome or "?") + " - " + str(tot_o) + " ordini | " + str(tot_r) + " richieste")
     await update.message.reply_text("Top clienti per ordini:\n\n" + "\n".join(righe))
+
 
 async def cmd_inattivi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in OPERATORI:
         return
     inattivi = get_inattivi(28)
-
     if not inattivi:
         await update.message.reply_text("Nessun cliente inattivo da piu di 28 giorni.")
         return
-
     righe = []
     for chat_id, nome, username, ultimo, giorni in inattivi[:15]:
         righe.append(
@@ -605,41 +618,8 @@ async def cmd_inattivi(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Inattivo da " + str(giorni) + " giorni (ultimo: " + (ultimo or "?") + ")\n"
             "tg://user?id=" + str(chat_id)
         )
-
     await update.message.reply_text("Clienti inattivi da 28+ giorni:\n\n" + "\n\n".join(righe))
 
-async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in OPERATORI:
-        return
-    testo = update.message.text.replace("/broadcast", "").strip()
-    if not testo:
-        await update.message.reply_text("Scrivi il messaggio dopo il comando.\nEsempio:\n/broadcast Ciao a tutti, novita in arrivo!")
-        return
-    con = sqlite3.connect(DB_PATH)
-    cur = con.cursor()
-    cur.execute("SELECT chat_id FROM clienti")
-    clienti = cur.fetchall()
-    con.close()
-    if not clienti:
-        await update.message.reply_text("Nessun cliente registrato.")
-        return
-    inviati = 0
-    falliti = 0
-    pulsante = InlineKeyboardMarkup([[
-        InlineKeyboardButton("Ordina ora", callback_data="qty:nuovo")
-    ]])
-    for (chat_id,) in clienti:
-        try:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text="King del Popper\n\n" + testo,
-                reply_markup=pulsante
-            )
-            inviati += 1
-        except Exception as e:
-            logging.warning("Broadcast fallito per " + str(chat_id) + ": " + str(e))
-            falliti += 1
-    await update.message.reply_text("Broadcast completato!\n\nInviati: " + str(inviati) + "\nFalliti: " + str(falliti))
 
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in OPERATORI:
@@ -658,20 +638,73 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cur.execute("SELECT COUNT(*) FROM richieste WHERE presa_da IS NULL")
     in_attesa = cur.fetchone()[0]
     con.close()
-    fatturato_totale = tot_ordini * PREZZO_UNITARIO
-    fatturato_mese = ordini_mese * PREZZO_UNITARIO
     mese_nome = datetime.now().strftime("%B %Y")
-    testo_stats = (
+    await update.message.reply_text(
         "Statistiche Popperinho Shop\n\n"
         "Clienti registrati: " + str(tot_clienti) + "\n"
         "Richieste totali: " + str(tot_richieste) + "\n"
         "In attesa di risposta: " + str(in_attesa) + "\n\n"
         "Ordini completati totali: " + str(tot_ordini) + "\n"
-        "Fatturato totale: " + str(fatturato_totale) + " euro\n\n"
+        "Fatturato totale: " + str(tot_ordini * PREZZO_UNITARIO) + " euro\n\n"
         "Ordini questo mese (" + mese_nome + "): " + str(ordini_mese) + "\n"
-        "Fatturato questo mese: " + str(fatturato_mese) + " euro"
+        "Fatturato questo mese: " + str(ordini_mese * PREZZO_UNITARIO) + " euro"
     )
-    await update.message.reply_text(testo_stats)
+
+
+async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in OPERATORI:
+        return
+    testo = update.message.text.replace("/broadcast", "").strip() if update.message.text else ""
+    foto = update.message.photo
+    video = update.message.video
+    if not testo and not foto and not video:
+        await update.message.reply_text(
+            "Scrivi il testo dopo /broadcast oppure allega una foto o video con /broadcast nella didascalia."
+        )
+        return
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("SELECT chat_id FROM clienti")
+    clienti = cur.fetchall()
+    con.close()
+    if not clienti:
+        await update.message.reply_text("Nessun cliente registrato.")
+        return
+    intestazione = "King del Popper\n\n"
+    pulsante = InlineKeyboardMarkup([[InlineKeyboardButton("Ordina ora", callback_data="qty:nuovo")]])
+    inviati = 0
+    falliti = 0
+    for (chat_id,) in clienti:
+        try:
+            if foto:
+                file_id = foto[-1].file_id
+                await context.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=file_id,
+                    caption=intestazione + testo if testo else intestazione,
+                    reply_markup=pulsante
+                )
+            elif video:
+                await context.bot.send_video(
+                    chat_id=chat_id,
+                    video=video.file_id,
+                    caption=intestazione + testo if testo else intestazione,
+                    reply_markup=pulsante
+                )
+            else:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=intestazione + testo,
+                    reply_markup=pulsante
+                )
+            inviati += 1
+        except Exception as e:
+            logging.warning("Broadcast fallito per " + str(chat_id) + ": " + str(e))
+            falliti += 1
+    await update.message.reply_text(
+        "Broadcast completato!\n\nInviati: " + str(inviati) + "\nFalliti: " + str(falliti)
+    )
+
 
 async def cmd_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in OPERATORI:
@@ -703,7 +736,88 @@ async def cmd_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except ValueError:
             await update.message.reply_text("ID non valido. Usa: /blacklist rimuovi 123456789")
     else:
-        await update.message.reply_text("Comandi:\n/blacklist - mostra la lista\n/blacklist aggiungi 123456789 Nome\n/blacklist rimuovi 123456789")
+        await update.message.reply_text(
+            "Comandi:\n"
+            "/blacklist - mostra la lista\n"
+            "/blacklist aggiungi 123456789 Nome\n"
+            "/blacklist rimuovi 123456789"
+        )
+
+
+async def cmd_nuke(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in OPERATORI:
+        return
+    chat_id = update.effective_user.id
+    nuke_stato[chat_id] = 1
+    pulsante = InlineKeyboardMarkup([[InlineKeyboardButton("CONFERMA 1/3", callback_data="nuke:1")]])
+    await update.message.reply_text(
+        "ATTENZIONE!\n\nStai per cancellare TUTTI i dati del bot.\nClienti, ordini, storico, tutto.\n\nSei sicuro?",
+        reply_markup=pulsante
+    )
+
+
+async def gestisci_nuke_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    chat_id = query.from_user.id
+    if chat_id not in OPERATORI:
+        return
+    if not query.data.startswith("nuke:"):
+        return
+
+    step = query.data.split(":")[1]
+
+    if step == "1":
+        nuke_stato[chat_id] = 2
+        pulsante = InlineKeyboardMarkup([[InlineKeyboardButton("CONFERMA 2/3", callback_data="nuke:2")]])
+        await query.edit_message_text(
+            "Sei DAVVERO sicuro?\n\nNon ci sara modo di recuperare nulla.\nClienti persi per sempre.",
+            reply_markup=pulsante
+        )
+
+    elif step == "2":
+        nuke_stato[chat_id] = 3
+        pulsante = InlineKeyboardMarkup([[InlineKeyboardButton("CONFERMA 3/3 - ULTIMA CHANCE", callback_data="nuke:3")]])
+        await query.edit_message_text(
+            "ULTIMA CHANCE.\n\nDopo questo passaggio inserisci la parola d'ordine.\nVuoi davvero procedere?",
+            reply_markup=pulsante
+        )
+
+    elif step == "3":
+        nuke_stato[chat_id] = 4
+        await query.edit_message_text(
+            "Scrivi la parola d'ordine per confermare il NUKE:"
+        )
+
+
+async def gestisci_parola_nuke(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_user.id
+    if chat_id not in OPERATORI:
+        return
+    if nuke_stato.get(chat_id) != 4:
+        return
+    testo = update.message.text.strip()
+    if testo != "NAGASAKI":
+        await update.message.reply_text("Parola d'ordine errata. Operazione annullata.")
+        nuke_stato.pop(chat_id, None)
+        return
+
+    # NUKE
+    nuke_stato.pop(chat_id, None)
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("DELETE FROM richieste")
+    cur.execute("DELETE FROM messaggi_operatori")
+    cur.execute("DELETE FROM clienti")
+    cur.execute("DELETE FROM blacklist")
+    cur.execute("DELETE FROM impostazioni")
+    con.commit()
+    con.close()
+
+    await update.message.reply_text(
+        "NAGASAKI eseguito.\n\nTutti i dati sono stati cancellati.\nBenvenuto nel miglior shop di calzini online! :)"
+    )
+
 
 async def cmd_aiuto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in OPERATORI:
@@ -715,7 +829,9 @@ async def cmd_aiuto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/clienti - tutti i clienti con richieste e ordini\n"
         "/top - classifica clienti per ordini\n"
         "/inattivi - chi non scrive da 28+ giorni\n"
-        "/broadcast <testo> - manda un messaggio a tutti i clienti\n"
+        "/stats - statistiche e fatturato\n"
+        "/broadcast <testo> - manda un messaggio a tutti (puoi allegare foto o video)\n"
+        "/blacklist - gestisci utenti bloccati\n"
         "/setvideo - imposta il video di benvenuto (allega il video al comando)\n"
         "/aiuto - mostra questo messaggio"
     )
@@ -731,13 +847,20 @@ def main():
     app.add_handler(CommandHandler("clienti", cmd_clienti))
     app.add_handler(CommandHandler("top", cmd_top))
     app.add_handler(CommandHandler("inattivi", cmd_inattivi))
-    app.add_handler(CommandHandler("broadcast", cmd_broadcast))
     app.add_handler(CommandHandler("stats", cmd_stats))
+    app.add_handler(CommandHandler("broadcast", cmd_broadcast))
     app.add_handler(CommandHandler("blacklist", cmd_blacklist))
     app.add_handler(CommandHandler("aiuto", cmd_aiuto))
+    app.add_handler(CommandHandler("nuke", cmd_nuke))
+    app.add_handler(CallbackQueryHandler(gestisci_nuke_callback, pattern="^nuke:"))
+    app.add_handler(CommandHandler("setvideo", cmd_setvideo))
     app.add_handler(CallbackQueryHandler(gestisci_callback))
     app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, cmd_setvideo))
-    app.add_handler(CommandHandler("setvideo", cmd_setvideo))
+    app.add_handler(MessageHandler(
+        (filters.PHOTO | filters.VIDEO) & filters.CAPTION & filters.Regex(r"(?i)/broadcast"),
+        cmd_broadcast
+    ))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.User(list(OPERATORI.keys())), gestisci_parola_nuke))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ricevi_messaggio))
     app.job_queue.run_repeating(
         invia_promemoria_inattivi,
@@ -746,6 +869,7 @@ def main():
     )
     print("Bot avviato - " + NOME_NEGOZIO)
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
