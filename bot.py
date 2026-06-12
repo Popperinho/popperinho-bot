@@ -505,7 +505,7 @@ async def gestisci_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 link_bot = "https://t.me/" + bot_info.username
                 await context.bot.send_message(
                     chat_id=chat_id_cliente,
-                    text=("Chi non spoppera in compagnia e un ladro o una spia, "
+                    text=("Chi non spoppera in compagnia è un ladro o una spia, "
                           "manda il link a un amico!\n\n" + link_bot)
                 )
             except Exception as e:
