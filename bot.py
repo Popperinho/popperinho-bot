@@ -307,10 +307,10 @@ def conta_ordini_totali():
 def build_testo(req):
     rid, chat_id_cliente, nome_cliente, username, testo, ricevuta_il, presa_da, presa_il, ordine_completato, completato_il, completato_da = req
     if presa_da is None:
-        stato = "Stato: In attesa"
+        stato = "⏳ Stato: In attesa"
     elif ordine_completato:
         stato = ("Presa da: " + presa_da + " alle " + presa_il + "\n"
-                 "Completato da: " + (completato_da or "?") + " alle " + (completato_il or "?"))
+                 "📦 Completato da: " + (completato_da or "?") + " alle " + (completato_il or "?"))
     else:
         stato = "Presa da: " + presa_da + " alle " + presa_il + "\nIn lavorazione"
     return (
@@ -327,23 +327,23 @@ def build_tastiera(req):
     rid, _, _, _, _, _, presa_da, _, ordine_completato, _, _ = req
     tasti = []
     if presa_da is None:
-        tasti.append(InlineKeyboardButton("Prendo in carico", callback_data="preso:" + str(rid)))
+        tasti.append(InlineKeyboardButton("✅ Prendo in carico", callback_data="preso:" + str(rid)))
     if presa_da is not None and not ordine_completato:
-        tasti.append(InlineKeyboardButton("Ordine completato", callback_data="completato:" + str(rid)))
+        tasti.append(InlineKeyboardButton("📦 Ordine completato", callback_data="completato:" + str(rid)))
     return InlineKeyboardMarkup([tasti]) if tasti else None
 
 
 def tastiera_quantita():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("1  ->  " + str(PREZZO_UNITARIO) + "euro", callback_data="qty:1"),
-            InlineKeyboardButton("2  ->  " + str(PREZZO_UNITARIO * 2) + "euro", callback_data="qty:2"),
+            InlineKeyboardButton("1️⃣  →  " + str(PREZZO_UNITARIO) + "euro", callback_data="qty:1"),
+            InlineKeyboardButton("2️⃣  →  " + str(PREZZO_UNITARIO * 2) + "euro", callback_data="qty:2"),
         ],
         [
-            InlineKeyboardButton("3  ->  " + str(PREZZO_UNITARIO * 3) + "euro", callback_data="qty:3"),
-            InlineKeyboardButton("4  ->  " + str(PREZZO_UNITARIO * 4) + "euro", callback_data="qty:4"),
+            InlineKeyboardButton("3️⃣  →  " + str(PREZZO_UNITARIO * 3) + "euro", callback_data="qty:3"),
+            InlineKeyboardButton("4️⃣  →  " + str(PREZZO_UNITARIO * 4) + "euro", callback_data="qty:4"),
         ],
-        [InlineKeyboardButton("Altre quantita o domande", callback_data="qty:altro")],
+        [InlineKeyboardButton("✏️ Altre quantita o domande", callback_data="qty:altro")],
     ])
 
 
@@ -354,13 +354,13 @@ async def invia_promemoria_inattivi(context: ContextTypes.DEFAULT_TYPE):
     inviati = 0
     for chat_id, nome, username, ultimo, giorni in inattivi:
         medie = random.randint(5, 20)
-        pulsante = InlineKeyboardMarkup([[InlineKeyboardButton("Ordina ora", callback_data="qty:nuovo")]])
+        pulsante = InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Ordina ora", callback_data="qty:nuovo")]])
         try:
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=("Ciao " + (nome or "amico") + ", dobbiamo parlare.\n\n"
                       "Ultimamente ci sentiamo poco... forse e arrivato il momento "
-                      "di spopperare e calarsi " + str(medie) + " medie"),
+                      "di spopperare e calarsi " + str(medie) + " medie 🍺"),
                 reply_markup=pulsante
             )
             inviati += 1
@@ -382,7 +382,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Ciao " + nome + "! Benvenuto dal King del Popper\n\n"
         "Scrivi la tua richiesta d'ordine e verrai contattato in privato il prima possibile!\n\n"
-        "Seleziona la quantita:",
+        "Seleziona la quantita 👇",
         reply_markup=tastiera_quantita()
     )
 
@@ -425,7 +425,7 @@ async def ricevi_messaggio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logging.warning("Errore invio operatore: " + str(e))
 
-    await update.message.reply_text("Messaggio ricevuto! Ti risponderemo il prima possibile.")
+    await update.message.reply_text("✅ Messaggio ricevuto! Ti risponderemo il prima possibile.")
 
 
 async def gestisci_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -447,7 +447,7 @@ async def gestisci_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if valore == "altro":
-            await query.edit_message_text("Scrivi pure la tua richiesta o domanda, ti risponderemo il prima possibile!")
+            await query.edit_message_text("✏️ Scrivi pure la tua richiesta o domanda, ti risponderemo il prima possibile!")
             return
 
         quantita = int(valore)
@@ -469,7 +469,7 @@ async def gestisci_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logging.warning("Errore invio operatore: " + str(e))
 
-        pulsante_nuovo = InlineKeyboardMarkup([[InlineKeyboardButton("Piazza nuovo ordine", callback_data="qty:nuovo")]])
+        pulsante_nuovo = InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Piazza nuovo ordine", callback_data="qty:nuovo")]])
         await query.edit_message_text(
             "Grazie! La tua richiesta e stata presa in carico.\n\n"
             "Quantita: " + str(quantita) + " Popperinho\n"
@@ -671,7 +671,7 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Nessun cliente registrato.")
         return
     intestazione = "King del Popper\n\n"
-    pulsante = InlineKeyboardMarkup([[InlineKeyboardButton("Ordina ora", callback_data="qty:nuovo")]])
+    pulsante = InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Ordina ora", callback_data="qty:nuovo")]])
     inviati = 0
     falliti = 0
     for (chat_id,) in clienti:
