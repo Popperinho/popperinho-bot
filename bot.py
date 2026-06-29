@@ -1,8 +1,12 @@
 import logging
 import sqlite3
 import random
+import re
 from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import (
+    Update, InlineKeyboardButton, InlineKeyboardMarkup, ForceReply,
+    BotCommand, BotCommandScopeDefault, BotCommandScopeChat
+)
 from telegram.ext import (
     ApplicationBuilder, MessageHandler, CommandHandler,
     CallbackQueryHandler, filters, ContextTypes
@@ -46,6 +50,15 @@ def init_db():
             op_chat_id   INTEGER NOT NULL,
             msg_id       INTEGER NOT NULL,
             PRIMARY KEY (richiesta_id, op_chat_id)
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS routing_operatore (
+            op_chat_id      INTEGER NOT NULL,
+            msg_id          INTEGER NOT NULL,
+            chat_id_cliente INTEGER NOT NULL,
+            nome_cliente    TEXT,
+            PRIMARY KEY (op_chat_id, msg_id)
         )
     """)
     cur.execute("""
@@ -175,6 +188,31 @@ def salva_msg_operatore(richiesta_id, op_chat_id, msg_id):
     """, (richiesta_id, op_chat_id, msg_id))
     con.commit()
     con.close()
+
+
+def registra_routing(op_chat_id, msg_id, chat_id_cliente, nome_cliente):
+    """Collega un messaggio nella chat di un operatore al cliente a cui risponde.
+    Così, rispondendo (reply) a quel messaggio, il bot sa a chi inoltrarlo."""
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("""
+        INSERT OR REPLACE INTO routing_operatore (op_chat_id, msg_id, chat_id_cliente, nome_cliente)
+        VALUES (?, ?, ?, ?)
+    """, (op_chat_id, msg_id, chat_id_cliente, nome_cliente))
+    con.commit()
+    con.close()
+
+
+def trova_cliente_da_messaggio(op_chat_id, msg_id):
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute(
+        "SELECT chat_id_cliente, nome_cliente FROM routing_operatore WHERE op_chat_id = ? AND msg_id = ?",
+        (op_chat_id, msg_id)
+    )
+    row = cur.fetchone()
+    con.close()
+    return row  # (chat_id_cliente, nome_cliente) oppure None
 
 
 def prendi_in_carico(richiesta_id, nome_operatore):
@@ -313,24 +351,36 @@ def build_testo(req):
                  "📦 Completato da: " + (completato_da or "?") + " alle " + (completato_il or "?"))
     else:
         stato = "Presa da: " + presa_da + " alle " + presa_il + "\nIn lavorazione"
+    senza_username = (not username) or username == "(senza username)"
+    contatto = "Chat: tg://user?id=" + str(chat_id_cliente)
+    if senza_username:
+        contatto += "\n⚠️ Nessun username: rispondi a questo messaggio (o usa ✉️ Rispondi) per scrivergli tramite il bot."
     return (
         "Richiesta #" + str(rid) + "\n\n"
         "Cliente: " + (nome_cliente or "?") + "  |  " + (username or "?") + "\n"
         "Ora: " + ricevuta_il + "\n\n"
         "Messaggio: " + testo + "\n\n"
-        "Chat: tg://user?id=" + str(chat_id_cliente) + "\n\n"
+        + contatto + "\n\n"
         + stato
     )
 
 
 def build_tastiera(req):
     rid, _, _, _, _, _, presa_da, _, ordine_completato, _, _ = req
-    tasti = []
+    riga1 = []
     if presa_da is None:
-        tasti.append(InlineKeyboardButton("✅ Prendo in carico", callback_data="preso:" + str(rid)))
+        riga1.append(InlineKeyboardButton("✅ Prendo in carico", callback_data="preso:" + str(rid)))
     if presa_da is not None and not ordine_completato:
-        tasti.append(InlineKeyboardButton("📦 Ordine completato", callback_data="completato:" + str(rid)))
-    return InlineKeyboardMarkup([tasti]) if tasti else None
+        riga1.append(InlineKeyboardButton("📦 Ordine completato", callback_data="completato:" + str(rid)))
+    riga2 = [
+        InlineKeyboardButton("✉️ Rispondi", callback_data="rispondi:" + str(rid)),
+        InlineKeyboardButton("🚫 Blacklist", callback_data="ban:" + str(rid)),
+    ]
+    righe = []
+    if riga1:
+        righe.append(riga1)
+    righe.append(riga2)
+    return InlineKeyboardMarkup(righe)
 
 
 def tastiera_quantita():
@@ -410,6 +460,20 @@ async def ricevi_messaggio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nome_cliente = ((cliente.first_name or "") + (" " + cliente.last_name if cliente.last_name else "")).strip()
     username = "@" + cliente.username if cliente.username else "(senza username)"
 
+    # Conversazione attiva? (ultimo contatto recente) → non ripetere l'avviso automatico
+    conversazione_attiva = False
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    cur.execute("SELECT ultimo_contatto FROM clienti WHERE chat_id = ?", (chat_id_cliente,))
+    row = cur.fetchone()
+    con.close()
+    if row and row[0]:
+        try:
+            diff = (datetime.now() - datetime.strptime(row[0], "%d/%m/%Y %H:%M")).total_seconds()
+            conversazione_attiva = diff < 20 * 60
+        except Exception:
+            pass
+
     registra_cliente(chat_id_cliente, nome_cliente, username)
     richiesta_id = salva_richiesta(chat_id_cliente, nome_cliente, username, testo)
     req = get_richiesta(richiesta_id)
@@ -422,10 +486,12 @@ async def ricevi_messaggio(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=build_tastiera(req)
             )
             salva_msg_operatore(richiesta_id, op_chat_id, msg.message_id)
+            registra_routing(op_chat_id, msg.message_id, chat_id_cliente, nome_cliente)
         except Exception as e:
             logging.warning("Errore invio operatore: " + str(e))
 
-    await update.message.reply_text("✅ Messaggio ricevuto! Ti risponderemo il prima possibile.")
+    if not conversazione_attiva:
+        await update.message.reply_text("✅ Messaggio ricevuto! Ti risponderemo il prima possibile.")
 
 
 async def gestisci_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -466,6 +532,7 @@ async def gestisci_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply_markup=build_tastiera(req)
                 )
                 salva_msg_operatore(richiesta_id, op_chat_id, msg.message_id)
+                registra_routing(op_chat_id, msg.message_id, chat_id_cliente, nome_cliente)
             except Exception as e:
                 logging.warning("Errore invio operatore: " + str(e))
 
@@ -482,7 +549,36 @@ async def gestisci_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── Pulsanti operatori ──
     operatore_id = query.from_user.id
+    if operatore_id not in OPERATORI:
+        return
     nome_operatore = OPERATORI.get(operatore_id, query.from_user.first_name)
+
+    if query.data.startswith("rispondi:"):
+        richiesta_id = int(query.data.split(":")[1])
+        req = get_richiesta(richiesta_id)
+        if not req:
+            await query.answer("Richiesta non trovata.", show_alert=True)
+            return
+        await query.answer()
+        prompt = await context.bot.send_message(
+            chat_id=operatore_id,
+            text=("✍️ Rispondi a questo messaggio per scrivere a " + (req[2] or "cliente") +
+                  " (richiesta #" + str(richiesta_id) + ")."),
+            reply_markup=ForceReply(selective=False)
+        )
+        # collega la casella di risposta a questo specifico cliente
+        registra_routing(operatore_id, prompt.message_id, req[1], req[2])
+        return
+
+    if query.data.startswith("ban:"):
+        richiesta_id = int(query.data.split(":")[1])
+        req = get_richiesta(richiesta_id)
+        if not req:
+            await query.answer("Richiesta non trovata.", show_alert=True)
+            return
+        aggiungi_blacklist(req[1], req[2] or "Sconosciuto")
+        await query.answer("🚫 " + (req[2] or "Cliente") + " aggiunto alla blacklist.", show_alert=True)
+        return
 
     if query.data.startswith("preso:"):
         richiesta_id = int(query.data.split(":")[1])
@@ -654,7 +750,8 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in OPERATORI:
         return
-    testo = update.message.text.replace("/broadcast", "").strip() if update.message.text else ""
+    raw = update.message.text or update.message.caption or ""
+    testo = re.sub(r"^\s*/broadcast(@\w+)?", "", raw, count=1, flags=re.IGNORECASE).strip()
     foto = update.message.photo
     video = update.message.video
     if not testo and not foto and not video:
@@ -735,12 +832,20 @@ async def cmd_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Utente " + str(chat_id) + " rimosso dalla blacklist. ✅")
         except ValueError:
             await update.message.reply_text("ID non valido. Usa: /blacklist rimuovi 123456789")
+    elif args[0].lstrip("-").isdigit():
+        # /blacklist 123456789 [Nome]  → aggiunge direttamente
+        chat_id = int(args[0])
+        nome = " ".join(args[1:]) if len(args) > 1 else "Sconosciuto"
+        aggiungi_blacklist(chat_id, nome)
+        await update.message.reply_text("Utente " + str(chat_id) + " aggiunto alla blacklist. ✅")
     else:
         await update.message.reply_text(
             "Comandi:\n"
             "/blacklist - mostra la lista\n"
+            "/blacklist 123456789 Nome - aggiunge (anche senza scrivere 'aggiungi')\n"
             "/blacklist aggiungi 123456789 Nome\n"
-            "/blacklist rimuovi 123456789"
+            "/blacklist rimuovi 123456789\n\n"
+            "Suggerimento: il modo più semplice è il tasto 🚫 Blacklist sotto la richiesta del cliente."
         )
 
 
@@ -790,6 +895,47 @@ async def gestisci_nuke_callback(update: Update, context: ContextTypes.DEFAULT_T
         )
 
 
+async def gestisci_testo_operatore(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    op_id = update.effective_user.id
+    if op_id not in OPERATORI:
+        return
+
+    # ── Risposta a un cliente: instradata in base al messaggio a cui si risponde ──
+    # L'operatore risponde (reply) alla scheda di un cliente (o alla casella aperta
+    # col tasto ✉️ Rispondi) e il bot recapita SOLO a quel cliente. Così si possono
+    # gestire più clienti contemporaneamente: ogni reply va al destinatario giusto.
+    reply_to = update.message.reply_to_message
+    if reply_to is not None:
+        dest = trova_cliente_da_messaggio(op_id, reply_to.message_id)
+        if dest is not None:
+            chat_id_cliente, nome_cliente = dest
+            testo = (update.message.text or "").strip()
+            try:
+                await context.bot.send_message(
+                    chat_id=chat_id_cliente,
+                    text="💬 " + NOME_NEGOZIO + ":\n\n" + testo +
+                         "\n\n✍️ Puoi rispondere scrivendo direttamente qui."
+                )
+                # conferma di consegna discreta (reazione ✅), senza intasare la chat
+                try:
+                    await context.bot.set_message_reaction(
+                        chat_id=update.effective_chat.id,
+                        message_id=update.message.message_id,
+                        reaction="✅"
+                    )
+                except Exception:
+                    pass  # se le reazioni non sono disponibili, nessun problema
+            except Exception as e:
+                await update.message.reply_text(
+                    "❌ Impossibile inviare il messaggio a " + (nome_cliente or "cliente") + ".\n"
+                    "Probabilmente ha bloccato il bot o non ha mai avviato la chat.\n(" + str(e) + ")"
+                )
+            return
+
+    # ── Flusso parola d'ordine NUKE ──
+    await gestisci_parola_nuke(update, context)
+
+
 async def gestisci_parola_nuke(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_user.id
     if chat_id not in OPERATORI:
@@ -808,6 +954,7 @@ async def gestisci_parola_nuke(update: Update, context: ContextTypes.DEFAULT_TYP
     cur = con.cursor()
     cur.execute("DELETE FROM richieste")
     cur.execute("DELETE FROM messaggi_operatori")
+    cur.execute("DELETE FROM routing_operatore")
     cur.execute("DELETE FROM clienti")
     cur.execute("DELETE FROM blacklist")
     cur.execute("DELETE FROM impostazioni")
@@ -833,15 +980,50 @@ async def cmd_aiuto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/broadcast <testo> - manda un messaggio a tutti (puoi allegare foto o video)\n"
         "/blacklist - gestisci utenti bloccati\n"
         "/setvideo - imposta il video di benvenuto (allega il video al comando)\n"
-        "/aiuto - mostra questo messaggio"
+        "/aiuto - mostra questo messaggio\n\n"
+        "💬 Per rispondere a un cliente: usa il tasto Rispondi di Telegram sulla sua "
+        "scheda (oppure il tasto ✉️ Rispondi) e scrivi. Il messaggio arriva solo a quel "
+        "cliente. Puoi gestire più clienti insieme: ogni risposta va al destinatario "
+        "della scheda a cui rispondi."
     )
 
 
 # ── AVVIO ─────────────────────────────────────────────────────────────────────
 
+async def imposta_menu_comandi(app):
+    """Imposta il menu comandi nativo di Telegram (il pulsante ≡ accanto alla
+    casella di testo). I clienti vedono solo /start; gli operatori vedono il
+    menu completo, così non devono ricordarsi i comandi a memoria."""
+    try:
+        await app.bot.set_my_commands(
+            [BotCommand("start", "Inizia o fai un nuovo ordine")],
+            scope=BotCommandScopeDefault()
+        )
+        comandi_operatore = [
+            BotCommand("storico", "Ultime richieste"),
+            BotCommand("clienti", "Lista clienti"),
+            BotCommand("top", "Classifica clienti per ordini"),
+            BotCommand("inattivi", "Clienti inattivi da 28+ giorni"),
+            BotCommand("stats", "Statistiche e fatturato"),
+            BotCommand("broadcast", "Messaggio a tutti i clienti"),
+            BotCommand("blacklist", "Gestisci utenti bloccati"),
+            BotCommand("setvideo", "Imposta il video di benvenuto"),
+            BotCommand("aiuto", "Guida ai comandi"),
+        ]
+        for op_id in OPERATORI:
+            try:
+                await app.bot.set_my_commands(
+                    comandi_operatore, scope=BotCommandScopeChat(chat_id=op_id)
+                )
+            except Exception as e:
+                logging.warning("Menu operatore non impostato per " + str(op_id) + ": " + str(e))
+    except Exception as e:
+        logging.warning("Impossibile impostare il menu comandi: " + str(e))
+
+
 def main():
     init_db()
-    app = ApplicationBuilder().token(TOKEN).build()
+    app = ApplicationBuilder().token(TOKEN).post_init(imposta_menu_comandi).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("storico", cmd_storico))
     app.add_handler(CommandHandler("clienti", cmd_clienti))
@@ -855,12 +1037,15 @@ def main():
     app.add_handler(CallbackQueryHandler(gestisci_nuke_callback, pattern="^nuke:"))
     app.add_handler(CommandHandler("setvideo", cmd_setvideo))
     app.add_handler(CallbackQueryHandler(gestisci_callback))
-    app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, cmd_setvideo))
+    # IMPORTANTE: il broadcast con foto/video va registrato PRIMA di cmd_setvideo,
+    # altrimenti un video con didascalia /broadcast verrebbe interpretato come
+    # video di benvenuto invece che come broadcast.
     app.add_handler(MessageHandler(
-        (filters.PHOTO | filters.VIDEO) & filters.CAPTION & filters.Regex(r"(?i)/broadcast"),
+        (filters.PHOTO | filters.VIDEO) & filters.CAPTION & filters.Regex(r"(?i)^\s*/broadcast"),
         cmd_broadcast
     ))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.User(list(OPERATORI.keys())), gestisci_parola_nuke))
+    app.add_handler(MessageHandler(filters.VIDEO | filters.Document.VIDEO, cmd_setvideo))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.User(list(OPERATORI.keys())), gestisci_testo_operatore))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ricevi_messaggio))
     app.job_queue.run_repeating(
         invia_promemoria_inattivi,
